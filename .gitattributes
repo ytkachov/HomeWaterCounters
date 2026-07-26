@@ -1,0 +1,25 @@
+# Нормализация переводов строк: в репозитории всегда LF, в рабочей копии — как
+# принято в системе. Без этого diff на Windows шумит целыми файлами.
+* text=auto
+
+*.cs        text diff=csharp
+*.csproj    text
+*.sln       text eol=crlf
+*.props     text
+*.targets   text
+*.json      text
+*.md        text
+*.xml       text
+*.xaml      text
+*.yml       text
+*.ps1       text eol=crlf
+*.sh        text eol=lf
+
+# Бинарные — не трогать
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.ico       binary
+*.zip       binary
+*.keystore  binary
+*.dat       binary

@@ -1,0 +1,75 @@
+# Результаты сборки
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+artifacts/
+*.binlog
+
+# Visual Studio / Rider / VS Code
+.vs/
+.idea/
+*.user
+*.suo
+*.userprefs
+*.DotSettings.user
+.vscode/
+
+# NuGet
+*.nupkg
+*.snupkg
+packages/
+.nuget/
+
+# Тесты и покрытие
+[Tt]est[Rr]esult*/
+coverage*.json
+coverage*.xml
+coverage*.info
+*.coverage
+*.trx
+
+# Playwright: браузеры ставятся отдельно, профили и трейсы — локальные артефакты
+.playwright/
+playwright-report/
+test-results/
+**/portal-profile/
+**/portal-diagnostics/
+*.zip.trace
+
+# Android
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# MAUI
+*.binlog
+Resources/Raw/*.tmp
+
+# App key Dropbox: локальная конфигурация и сгенерированная из неё константа.
+# В репозитории лежит только dropbox.local.props.example.
+dropbox.local.props
+DropboxAppKey.g.cs
+
+# Секреты и локальное состояние. В репозиторий не должно попасть ничего из этого:
+# refresh-токен Dropbox лежит под DPAPI в %LOCALAPPDATA%, а не здесь, но правило
+# оставлено как страховка от случайного копирования файла в дерево проекта.
+*.env
+appsettings.*.local.json
+secrets.json
+secrets.enc
+dropbox-token.dat
+*.pfx
+*.p12
+
+# Фикстуры распознавания: фотографии счётчиков содержат серийные номера и
+# привязаны к конкретной квартире, поэтому в публичный репозиторий не идут.
+fixtures/meters/*
+!fixtures/meters/.gitkeep
+!fixtures/meters/README.md
+
+# ОС
+Thumbs.db
+desktop.ini
+.DS_Store

@@ -1,0 +1,20 @@
+<!--
+  Шаблон локальной конфигурации Dropbox.
+
+  Скопируйте этот файл в dropbox.local.props (он в .gitignore) и подставьте свой
+  App key из https://www.dropbox.com/developers/apps.
+
+  Альтернатива без файла — переменная окружения:
+      $env:WATERCOUNTERS_DROPBOX_APP_KEY = 'ваш-ключ'
+
+  При PKCE app key не является секретом в криптографическом смысле: он неизбежно
+  попадает в собранное приложение, а защиту даёт code_verifier. Но он идентифицирует
+  ваше приложение, поэтому в публичном репозитории ему не место.
+-->
+<Project>
+
+  <PropertyGroup>
+    <WaterCountersDropboxAppKey>ЗАМЕНИТЕ-НА-СВОЙ-APP-KEY</WaterCountersDropboxAppKey>
+  </PropertyGroup>
+
+</Project>

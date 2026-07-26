@@ -1,0 +1,38 @@
+<Project>
+
+  <!--
+    App key Dropbox не хранится в репозитории. Источники, в порядке приоритета:
+      1. dropbox.local.props в корне решения (см. dropbox.local.props.example);
+      2. переменная окружения WATERCOUNTERS_DROPBOX_APP_KEY.
+    Ключ подставляется в сгенерированную константу на этапе сборки — на Android
+    переменных окружения нет, и передать его в рантайме иначе нельзя.
+  -->
+  <Import Project="$(MSBuildThisFileDirectory)dropbox.local.props"
+          Condition="Exists('$(MSBuildThisFileDirectory)dropbox.local.props')" />
+
+  <PropertyGroup>
+    <WaterCountersDropboxAppKey Condition="'$(WaterCountersDropboxAppKey)' == ''">$(WATERCOUNTERS_DROPBOX_APP_KEY)</WaterCountersDropboxAppKey>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+  <!--
+    Каждый payload, пересекающий границу Dropbox, сериализуется через
+    source-generated JsonSerializerContext. Флаг ниже это выявляет: без него забытый
+    [JsonSerializable] всплыл бы только на устройстве под trimming.
+
+    Флаг задаётся точечно в исполняемых проектах (Core.Tests, Mobile, Desktop), а НЕ
+    здесь на всё решение: Playwright общается со своим Node-драйвером через
+    рефлексивный JSON и с этим флагом падает при первом же запуске браузера.
+  -->
+
+</Project>
