@@ -24,6 +24,15 @@
 | 3–4 | Мобильное приложение и петля подтверждения | ⛔ нужен workload `maui-android` и JDK 21 |
 | 2 | Распознавание VLM | ⛔ нужна машина с GPU |
 
+## Документация
+
+| Документ | О чём |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | общий замысел, почему Dropbox используется как очередь |
+| [docs/dropbox-protocol.md](docs/dropbox-protocol.md) | раскладка папок, контракт сообщений, жизненный цикл задачи |
+| [docs/recognition-service.md](docs/recognition-service.md) | спецификация обработчика фотографий |
+| [docs/setup-gpu-host.md](docs/setup-gpu-host.md) | что поставить на машине обработчика |
+
 ## Архитектура
 
 ```
