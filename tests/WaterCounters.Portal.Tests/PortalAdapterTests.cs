@@ -8,13 +8,14 @@ namespace WaterCounters.Portal.Tests;
 /// так проверяется то, ради чего он написан: реальные клики, реальные cookie и
 /// реальные ответы формы.
 /// </summary>
+[Collection(PlaywrightCollection.Name)]
 public sealed class PortalAdapterTests : IDisposable
 {
     private static readonly PeriodKey Period = new(2026, 7);
 
     private readonly MockPortalServer _portal = new();
     private readonly string _profileDirectory = Path.Combine(
-        Path.GetTempPath(), "wc-portal-tests", Guid.NewGuid().ToString("N"));
+        PlaywrightBrowsersFixture.ProfileRoot, Guid.NewGuid().ToString("N"));
 
     public void Dispose()
     {

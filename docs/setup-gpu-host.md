@@ -10,7 +10,7 @@
 | Git | клонирование репозитория | `git --version` |
 | NVIDIA GPU, CC ≥ 5.0, от 8 ГБ VRAM | локальная VLM | `nvidia-smi` |
 | Ollama | хост модели | `ollama --version` |
-| Браузер Playwright | ввод в кабинет | ставится командой ниже |
+| Браузер Playwright | ввод в кабинет | скачивается сам при первом `dotnet test` |
 
 Проверить возможности видеокарты: `nvidia-smi --query-gpu=name,memory.total,compute_cap --format=csv`.
 При compute capability ниже 5.0 Ollama работать не будет.
@@ -29,11 +29,8 @@ dotnet build WaterCounters.sln
 dotnet test  WaterCounters.sln
 ```
 
-Браузер для Playwright ставится один раз:
-
-```powershell
-tests/WaterCounters.Portal.Tests/bin/Debug/net8.0/playwright.ps1 install chromium
-```
+Первый `dotnet test` скачивает браузер Playwright (около 300 МБ) — поэтому он идёт
+заметно дольше остальных. Отдельная команда для этого не нужна.
 
 Привязка Dropbox — на каждой машине своя, токен не переносится:
 

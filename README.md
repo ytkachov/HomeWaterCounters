@@ -75,7 +75,9 @@ dotnet build WaterCounters.sln
 dotnet test  WaterCounters.sln
 ```
 
-Для тестов адаптера кабинета нужен браузер Playwright (ставится один раз):
+Браузер для тестов адаптера кабинета скачивается автоматически при первом
+`dotnet test` — отдельная команда не нужна. Если хочется получить его заранее
+(например, до отключения от сети), можно сделать это вручную после сборки:
 
 ```powershell
 tests/WaterCounters.Portal.Tests/bin/Debug/net8.0/playwright.ps1 install chromium
