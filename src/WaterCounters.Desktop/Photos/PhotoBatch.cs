@@ -197,22 +197,46 @@ public static class MeterMatcher
 
         string name = Normalize(Path.GetFileNameWithoutExtension(RemotePath.GetFileName(path)));
 
+        // Сначала точное совпадение по всем счётчикам, и только потом — с хвостом.
+        // Порядок принципиален при однотипных счётчиках: с ключами "cold-water" и
+        // "cold-water-2" файл cold-water-2.jpg по хвостовому правилу достался бы
+        // первому. Это тихая перестановка счётчиков местами — то есть два неверных
+        // показания сразу, а не одно.
         foreach (MeterSpec candidate in meters)
         {
-            string key = Normalize(candidate.Key);
-
-            // Точное совпадение, либо ключ с хвостом: cold-water-2.jpg, cold-water (1).jpg.
-            // Хвост допускается потому, что второй снимок того же счётчика — обычное дело,
-            // а вот "cold-water-backup" от "cold-water" отличать незачем.
-            if (key.Length > 0 && (name == key || name.StartsWith(key + "-", StringComparison.Ordinal)))
+            if (Normalize(candidate.Key) == name && name.Length > 0)
             {
                 meter = candidate;
                 return true;
             }
         }
 
-        meter = null!;
-        return false;
+        // Хвост допускается ради второго снимка того же счётчика: cold-water (1).jpg,
+        // cold-water-копия.jpg. Но только если такой счётчик ровно один: при
+        // неоднозначности молча выбирать первый нельзя, пусть лучше файл уедет в
+        // нераспознанные и попадёт в письмо.
+        MeterSpec? prefixed = null;
+
+        foreach (MeterSpec candidate in meters)
+        {
+            string key = Normalize(candidate.Key);
+
+            if (key.Length == 0 || !name.StartsWith(key + "-", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (prefixed is not null)
+            {
+                meter = null!;
+                return false;
+            }
+
+            prefixed = candidate;
+        }
+
+        meter = prefixed!;
+        return prefixed is not null;
     }
 
     /// <summary>Приводит имя к виду ключа: нижний регистр, всё несловесное — в дефис.</summary>

@@ -1,5 +1,14 @@
+using System.Text.Json.Serialization;
+
 namespace WaterCounters.Core.Metering;
 
+/// <summary>
+/// Вид счётчика. Сериализуется строкой: settings.json правится руками и с телефона,
+/// а перепутать 0 и 1 — это перепутать холодную воду с горячей, то есть получить
+/// два неверных показания сразу. Написание менять нельзя — сломается совместимость
+/// с уже лежащими настройками.
+/// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter<MeterKind>))]
 public enum MeterKind
 {
     ColdWater = 0,

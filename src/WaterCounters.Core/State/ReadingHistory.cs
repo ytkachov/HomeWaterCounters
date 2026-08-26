@@ -9,17 +9,17 @@ namespace WaterCounters.Core.State;
 /// <summary>Факт закрытия периода. Именно он не даёт обработать один период дважды.</summary>
 public sealed record SubmittedPeriod
 {
-    public required PeriodKey Period { get; init; }
+    public required PeriodKey Period { get; set; }
 
-    public required DateTimeOffset SubmittedUtc { get; init; }
+    public required DateTimeOffset SubmittedUtc { get; set; }
 
     /// <summary>true — прогон был в режиме проверки, в кабинет ничего не ушло.</summary>
-    public required bool WasDryRun { get; init; }
+    public required bool WasDryRun { get; set; }
 
     /// <summary>true — значения не с фотографий, а посчитаны прогнозом.</summary>
-    public required bool WasForecast { get; init; }
+    public required bool WasForecast { get; set; }
 
-    public string? Note { get; init; }
+    public string? Note { get; set; }
 }
 
 /// <summary>Содержимое <c>/state/history.json</c>.</summary>
@@ -27,15 +27,31 @@ public sealed record ReadingHistory
 {
     public const int CurrentSchemaVersion = 1;
 
-    public int SchemaVersion { get; init; } = CurrentSchemaVersion;
+    public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 
-    public DateTimeOffset UpdatedUtc { get; init; }
+    public DateTimeOffset UpdatedUtc { get; set; }
 
-    public IReadOnlyList<MeterReading> Readings { get; init; } = [];
+    public IReadOnlyList<MeterReading> Readings { get; set; } = [];
 
-    public IReadOnlyList<SubmittedPeriod> Periods { get; init; } = [];
+    public IReadOnlyList<SubmittedPeriod> Periods { get; set; } = [];
 
     public static ReadingHistory Empty { get; } = new();
+
+    /// <summary>
+    /// Подставляет пустые списки вместо отсутствующих в файле.
+    ///
+    /// System.Text.Json не применяет инициализаторы свойств при десериализации, и
+    /// history.json без поля readings приходит с null вместо пустого списка. Дальше
+    /// это NRE в первой же проверке «период уже закрыт» — то есть падение там, где
+    /// поведение обязано быть «истории нет, значит период открыт».
+    /// </summary>
+    public ReadingHistory WithDefaults() => new()
+    {
+        SchemaVersion = SchemaVersion == 0 ? CurrentSchemaVersion : SchemaVersion,
+        UpdatedUtc = UpdatedUtc,
+        Readings = Readings ?? [],
+        Periods = Periods ?? [],
+    };
 
     /// <summary>
     /// Период уже закрыт. Режим проверки закрытием не считается: показания в кабинет
@@ -142,7 +158,7 @@ public sealed class ReadingHistoryStore(IRemoteStore store, QueueLayout layout, 
             throw new UnsupportedSchemaVersionException(history.SchemaVersion);
         }
 
-        return history;
+        return history.WithDefaults();
     }
 
     public async Task<ReadingHistory> SaveAsync(ReadingHistory history, CancellationToken ct = default)

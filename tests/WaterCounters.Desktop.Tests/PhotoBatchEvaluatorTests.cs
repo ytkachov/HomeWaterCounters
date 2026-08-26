@@ -167,4 +167,48 @@ public class MeterMatcherTests
     [InlineData("/photos/2026-07/gas.jpg")]
     public void LeavesUnknownNamesUnmatched(string path) =>
         Assert.False(MeterMatcher.TryMatchByFileName(path, DesktopTestData.Meters, out _));
+
+    [Fact]
+    public void ExactMatchBeatsThePrefixRule()
+    {
+        // Квартира с двумя счётчиками холодной воды: ключи "cold-water" и
+        // "cold-water-2". По хвостовому правилу файл cold-water-2.jpg достался бы
+        // первому — то есть счётчики молча поменялись бы местами, а это два неверных
+        // показания сразу.
+        IReadOnlyList<MeterSpec> pair =
+        [
+            DesktopTestData.ColdWater,
+            DesktopTestData.ColdWater with { Key = "cold-water-2", SerialNumber = "55-555-555", SortOrder = 1 },
+        ];
+
+        Assert.True(MeterMatcher.TryMatchByFileName("/photos/2026-07/cold-water-2.jpg", pair, out MeterSpec second));
+        Assert.Equal("cold-water-2", second.Key);
+
+        Assert.True(MeterMatcher.TryMatchByFileName("/photos/2026-07/cold-water.jpg", pair, out MeterSpec first));
+        Assert.Equal("cold-water", first.Key);
+    }
+
+    [Fact]
+    public void AmbiguousPrefixIsLeftUnmatchedRatherThanGuessed()
+    {
+        // Ключи "cold-water" и "cold-water-2", файл "cold-water-2-копия.jpg":
+        // хвост подходит обоим. Выбирать первый попавшийся нельзя — пусть уедет
+        // в нераспознанные и попадёт в письмо.
+        IReadOnlyList<MeterSpec> pair =
+        [
+            DesktopTestData.ColdWater,
+            DesktopTestData.ColdWater with { Key = "cold-water-2", SerialNumber = "55-555-555", SortOrder = 1 },
+        ];
+
+        Assert.False(MeterMatcher.TryMatchByFileName("/photos/2026-07/cold-water-2-copy.jpg", pair, out _));
+    }
+
+    [Fact]
+    public void PrefixStillWorksWhenItIsUnambiguous()
+    {
+        Assert.True(MeterMatcher.TryMatchByFileName(
+            "/photos/2026-07/cold-water (1).jpg", DesktopTestData.Meters, out MeterSpec meter));
+
+        Assert.Equal("cold-water", meter.Key);
+    }
 }

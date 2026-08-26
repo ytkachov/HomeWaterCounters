@@ -62,22 +62,22 @@ public sealed record ReadingsRejectedPayload
 
 public sealed record ProposedReading
 {
-    public required string MeterKey { get; init; }
+    public required string MeterKey { get; set; }
 
-    public required decimal Value { get; init; }
+    public required decimal Value { get; set; }
 
-    public string? RecognizedSerial { get; init; }
+    public string? RecognizedSerial { get; set; }
 
-    public double? Confidence { get; init; }
+    public double? Confidence { get; set; }
 
     /// <summary>Путь в Dropbox к кропу циферблата — показывается рядом с полем ввода.</summary>
-    public string? CropPath { get; init; }
+    public string? CropPath { get; set; }
 
-    public decimal? PreviousValue { get; init; }
+    public decimal? PreviousValue { get; set; }
 
-    public decimal? Delta { get; init; }
+    public decimal? Delta { get; set; }
 
-    public IReadOnlyList<string> Warnings { get; init; } = [];
+    public IReadOnlyList<string> Warnings { get; set; } = [];
 }
 
 /// <summary>Распознанные (или спрогнозированные) значения, ожидающие подтверждения.</summary>

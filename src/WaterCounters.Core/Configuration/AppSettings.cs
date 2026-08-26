@@ -19,36 +19,36 @@ public enum RecognitionProvider
 
 public sealed record RecognitionSettings
 {
-    public RecognitionProvider Provider { get; init; } = RecognitionProvider.Ollama;
+    public RecognitionProvider Provider { get; set; } = RecognitionProvider.Ollama;
 
     /// <summary>Адрес VLM-хоста. Может указывать на другую машину в локальной сети.</summary>
-    public string Endpoint { get; init; } = "http://localhost:11434";
+    public string Endpoint { get; set; } = "http://localhost:11434";
 
-    public string Model { get; init; } = "qwen2.5vl:7b";
+    public string Model { get; set; } = "qwen2.5vl:7b";
 
     /// <summary>Крупная модель на слабой карте отвечает минутами, отсюда запас.</summary>
-    public int TimeoutSeconds { get; init; } = 180;
+    public int TimeoutSeconds { get; set; } = 180;
 
     /// <summary>Проходов с разными кропами. 1 — без голосования, 3 — полный ансамбль.</summary>
-    public int EnsemblePasses { get; init; } = 3;
+    public int EnsemblePasses { get; set; } = 3;
 
     /// <summary>
     /// Сколько минут без новых файлов в папке периода считать признаком того, что
     /// ручная раскладка фотографий закончена. См. docs/recognition-service.md.
     /// </summary>
-    public int SettlingMinutes { get; init; } = 3;
+    public int SettlingMinutes { get; set; } = 3;
 
     /// <summary>Класть кроп циферблата в Dropbox рядом с предложением — телефон покажет его у поля.</summary>
-    public bool UploadCrops { get; init; } = true;
+    public bool UploadCrops { get; set; } = true;
 
     /// <summary>Длинная сторона кадра, подаваемого модели. Больше — медленнее и без выигрыша в точности.</summary>
-    public int MaxImageDimension { get; init; } = 1280;
+    public int MaxImageDimension { get; set; } = 1280;
 
     /// <summary>Ниже этого порога уверенность модели считается недостаточной и попадает в замечания.</summary>
-    public double MinConfidence { get; init; } = 0.80;
+    public double MinConfidence { get; set; } = 0.80;
 
     /// <summary>Отключает предобработку OpenCV — на случай, когда она портит конкретные снимки.</summary>
-    public bool Preprocess { get; init; } = true;
+    public bool Preprocess { get; set; } = true;
 }
 
 public sealed record PortalSettings
@@ -57,52 +57,52 @@ public sealed record PortalSettings
     /// Режим проверки: форма заполняется, кнопка отправки не нажимается.
     /// По умолчанию включён намеренно — отправка показаний необратима.
     /// </summary>
-    public bool DryRun { get; init; } = true;
+    public bool DryRun { get; set; } = true;
 
-    public bool Enabled { get; init; } = true;
+    public bool Enabled { get; set; } = true;
 
     /// <summary>Видимый браузер нужен один раз — пройти 2FA или капчу вручную.</summary>
-    public bool Headless { get; init; } = true;
+    public bool Headless { get; set; } = true;
 
-    public PortalSelectorMap? Selectors { get; init; }
+    public PortalSelectorMap? Selectors { get; set; }
 }
 
 public sealed record MailSettings
 {
-    public bool Enabled { get; init; }
+    public bool Enabled { get; set; }
 
-    public string? To { get; init; }
+    public string? To { get; set; }
 
-    public string? From { get; init; }
+    public string? From { get; set; }
 
-    public string SmtpHost { get; init; } = string.Empty;
+    public string SmtpHost { get; set; } = string.Empty;
 
-    public int SmtpPort { get; init; } = 587;
+    public int SmtpPort { get; set; } = 587;
 
-    public bool UseStartTls { get; init; } = true;
+    public bool UseStartTls { get; set; } = true;
 
-    public string? UserName { get; init; }
+    public string? UserName { get; set; }
 }
 
 /// <summary>Срок сдачи и льготный период. Одни и те же числа у телефона и у обработчика.</summary>
 public sealed record ScheduleSettings
 {
-    public int DeadlineDayOfMonth { get; init; } = 25;
+    public int DeadlineDayOfMonth { get; set; } = 25;
 
     /// <summary>
     /// Сколько дней после срока ещё имеет смысл ждать фотографии. По истечении
     /// watchdog считает прогноз: лучше приблизительное значение, чем пропуск периода.
     /// </summary>
-    public int GraceDays { get; init; } = 3;
+    public int GraceDays { get; set; } = 3;
 
     /// <summary>За сколько дней до срока телефон начинает напоминать.</summary>
-    public int ReminderDaysBefore { get; init; } = 3;
+    public int ReminderDaysBefore { get; set; } = 3;
 
     /// <summary>
     /// Часовой пояс, в котором считается календарь срока. Обе части обязаны считать
     /// его одинаково, иначе раз в месяц они разойдутся на сутки. Null — пояс машины.
     /// </summary>
-    public string? TimeZoneId { get; init; }
+    public string? TimeZoneId { get; set; }
 }
 
 /// <summary>
@@ -113,24 +113,46 @@ public sealed record AppSettings
 {
     public const int CurrentSchemaVersion = 1;
 
-    public int SchemaVersion { get; init; } = CurrentSchemaVersion;
+    public int SchemaVersion { get; set; } = CurrentSchemaVersion;
 
     /// <summary>Растёт при каждой записи. Сторона с меньшей ревизией не перезаписывает большую.</summary>
-    public int Revision { get; init; }
+    public int Revision { get; set; }
 
-    public DateTimeOffset UpdatedUtc { get; init; }
+    public DateTimeOffset UpdatedUtc { get; set; }
 
-    public string UpdatedBy { get; init; } = string.Empty;
+    public string UpdatedBy { get; set; } = string.Empty;
 
-    public IReadOnlyList<MeterSpec> Meters { get; init; } = [];
+    public IReadOnlyList<MeterSpec> Meters { get; set; } = [];
 
-    public ScheduleSettings Schedule { get; init; } = new();
+    public ScheduleSettings Schedule { get; set; } = new();
 
-    public RecognitionSettings Recognition { get; init; } = new();
+    public RecognitionSettings Recognition { get; set; } = new();
 
-    public PortalSettings Portal { get; init; } = new();
+    public PortalSettings Portal { get; set; } = new();
 
-    public MailSettings Mail { get; init; } = new();
+    public MailSettings Mail { get; set; } = new();
+
+    /// <summary>
+    /// Подставляет значения по умолчанию вместо секций, которых нет в файле.
+    ///
+    /// Нужен потому, что System.Text.Json при десериализации не применяет
+    /// инициализаторы свойств: отсутствующая в JSON секция приходит как null, а не
+    /// как значение по умолчанию. Файл правится руками и с телефона, не дописать
+    /// секцию — обычное дело, и обработчик обязан это пережить, а не упасть на
+    /// первом же обращении к настройкам.
+    /// </summary>
+    public AppSettings WithDefaults() => new()
+    {
+        SchemaVersion = SchemaVersion == 0 ? CurrentSchemaVersion : SchemaVersion,
+        Revision = Revision,
+        UpdatedUtc = UpdatedUtc,
+        UpdatedBy = UpdatedBy ?? string.Empty,
+        Meters = Meters ?? [],
+        Schedule = Schedule ?? new ScheduleSettings(),
+        Recognition = Recognition ?? new RecognitionSettings(),
+        Portal = Portal ?? new PortalSettings(),
+        Mail = Mail ?? new MailSettings(),
+    };
 
     public MeterSpec? MeterByKey(string key) =>
         Meters.FirstOrDefault(m => string.Equals(m.Key, key, StringComparison.OrdinalIgnoreCase));
@@ -186,11 +208,11 @@ public sealed record AppSettings
 /// </summary>
 public sealed record AppSecrets
 {
-    public string? PortalLogin { get; init; }
+    public string? PortalLogin { get; set; }
 
-    public string? PortalPassword { get; init; }
+    public string? PortalPassword { get; set; }
 
-    public string? SmtpPassword { get; init; }
+    public string? SmtpPassword { get; set; }
 }
 
 [JsonSourceGenerationOptions(

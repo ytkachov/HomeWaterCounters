@@ -52,7 +52,7 @@ public sealed class SettingsStore(IRemoteStore store, QueueLayout layout, TimePr
             throw new UnsupportedSchemaVersionException(settings.SchemaVersion);
         }
 
-        return settings;
+        return settings.WithDefaults();
     }
 
     /// <summary>
