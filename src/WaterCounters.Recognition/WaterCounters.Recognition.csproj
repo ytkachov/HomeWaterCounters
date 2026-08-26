@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WaterCounters.Core\WaterCounters.Core.csproj" />
+  </ItemGroup>
+
+  <!--
+    Нативная часть OpenCV тянется отдельным пакетом под win-x64. Обработчик и так
+    работает только на Windows, но фабрика предобработки всё равно переживает
+    отсутствие нативной библиотеки: распознавание без выравнивания хуже, чем с ним,
+    а вот падение хоста при старте — несоизмеримо хуже обоих вариантов.
+  -->
+  <ItemGroup>
+    <PackageReference Include="OpenCvSharp4" Version="4.10.0.20241108" />
+    <PackageReference Include="OpenCvSharp4.runtime.win" Version="4.10.0.20241108" />
+  </ItemGroup>
+
+</Project>

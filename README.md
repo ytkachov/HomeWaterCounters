@@ -19,10 +19,16 @@
 |---|---|---|
 | 0 | Ядро: контракты, очередь сообщений, шифрование секретов, прогноз, валидация | ✅ 94 теста |
 | 1 | Транспорт Dropbox: PKCE-авторизация, `IRemoteStore`, longpoll | ✅ проверено на боевом Dropbox |
+| 2 | Распознавание: схема ответа, Ollama и OpenAI-совместимые, ансамбль, предобработка | ✅ 46 тестов |
 | 5 | Адаптер личного кабинета на Playwright | ✅ 13 тестов на живом Chromium |
-| 6–7 | Десктопный хост: наблюдатель, обработчик очереди, watchdog, почта | ⏳ в работе |
+| 6–7 | Десктопный хост: наблюдатель, обработчик очереди, watchdog, почта | ✅ 47 тестов |
+| 2* | Подбор модели замерами по фикстурам | ⏳ нужна машина с GPU и реальные фотографии |
 | 3–4 | Мобильное приложение и петля подтверждения | ⛔ нужен workload `maui-android` и JDK 21 |
-| 2 | Распознавание VLM | ⛔ нужна машина с GPU |
+
+Обработчик собран и проверен целиком на заглушках: `StubRecognizer` вместо VLM,
+`InMemoryRemoteStore` вместо Dropbox, макет кабинета вместо сайта поставщика. Что
+осталось сделать на машине с GPU — прогнать `WaterCounters.Recognition.Bench` по
+реальным фотографиям и выбрать модель по замерам, а не на глаз.
 
 ## Документация
 
@@ -59,13 +65,20 @@ Dropbox используется не как хранилище, а как **о�
 
 ```
 src/
-  WaterCounters.Core/         контракты, IRemoteStore, Dropbox, крипто, прогноз, валидация
-  WaterCounters.Portal/       IPortalAdapter, Playwright, карта селекторов
+  WaterCounters.Core/            контракты, IRemoteStore, Dropbox, крипто, прогноз,
+                                 валидация, настройки, история, расчёт срока
+  WaterCounters.Portal/          IPortalAdapter, Playwright, карта селекторов
+  WaterCounters.Recognition/     IMeterRecognizer, схема ответа, Ollama и OpenAI-фасады,
+                                 ансамбль с голосованием, предобработка OpenCV
+  WaterCounters.Desktop/         хост: трей, наблюдатель, конвейер, watchdog, почта
 tools/
-  WaterCounters.DropboxSetup/ CLI авторизации Dropbox и smoke-прогон
+  WaterCounters.DropboxSetup/    CLI авторизации Dropbox и smoke-прогон
+  WaterCounters.Recognition.Bench/ замер модель × промпт × препроцессинг по фикстурам
 tests/
   WaterCounters.Core.Tests/
-  WaterCounters.Portal.Tests/ макет кабинета + прогон настоящим Chromium
+  WaterCounters.Portal.Tests/      макет кабинета + прогон настоящим Chromium
+  WaterCounters.Recognition.Tests/ заглушечный VLM-хост, GPU не нужен
+  WaterCounters.Desktop.Tests/     готовность пачки, конвейер, идемпотентность
 ```
 
 ## Сборка и тесты
@@ -82,6 +95,49 @@ dotnet test  WaterCounters.sln
 ```powershell
 tests/WaterCounters.Portal.Tests/bin/Debug/net8.0/playwright.ps1 install chromium
 ```
+
+## Запуск обработчика
+
+```powershell
+dotnet run --project src/WaterCounters.Desktop
+```
+
+Приложение уходит в трей. При первом запуске оно спрашивает мастер-пароль от
+`secrets.enc` (можно пропустить — тогда не будет доступа к кабинету и почте) и
+создаёт `/config/settings.json` с тремя типовыми счётчиками и включённым режимом
+проверки. Журнал — `%LOCALAPPDATA%\WaterCounters\logs`, локальное состояние —
+SQLite там же.
+
+Дальше достаточно положить фотографии в `/photos/<yyyy-MM>/` с именами по ключам
+счётчиков (`cold-water.jpg`, `hot-water.jpg`, `electricity.jpg`): обработчик заметит
+их сам, распознает и пришлёт письмо со значениями и скриншотом заполненной формы.
+
+Локальные настройки машины (пути, интервалы, видимый браузер) — в
+`src/WaterCounters.Desktop/appsettings.json`; всё, что одинаково для всех устройств,
+живёт в `/config/settings.json` в Dropbox и правится с телефона.
+
+## Выбор модели распознавания
+
+Не на глаз, а замерами. На вход — папка размеченных фикстур, на выход — таблица по
+каждой комбинации модель × промпт × препроцессинг:
+
+```powershell
+dotnet run --project tools/WaterCounters.Recognition.Bench -- `
+  --fixtures fixtures/meters `
+  --models qwen2.5vl:7b,gemma3:12b `
+  --prompts Russian,English `
+  --preprocess on,off `
+  --csv bench.csv
+```
+
+Фикстура — файл вида `fixtures/meters/cold-water_01234.567_12-345-678.jpg`: ключ
+счётчика, ожидаемое значение, серийный номер. Разрядность берётся из самой разметки,
+поэтому фикстура самодостаточна и настроек не требует. Утилита возвращает ненулевой
+код, пока доля точных совпадений по целой части не дотягивает до 95 %.
+
+Каждая неверно распознанная фотография добавляется в фикстуры и становится
+регрессионным тестом. Сами фотографии в репозиторий не попадают — они содержат
+серийные номера и привязаны к конкретному адресу.
 
 ## Настройка Dropbox
 

@@ -1,0 +1,50 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <!--
+      WPF — ради интерактивного сеанса: вход в кабинет в видимом браузере при первой
+      настройке и локальная привязка Dropbox службе Windows недоступны.
+      WinForms — ради NotifyIcon: у WPF своей иконки в трее нет, а тащить ради неё
+      постороннюю библиотеку незачем.
+    -->
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+
+    <!--
+      Каждый payload, пересекающий границу Dropbox, обязан сериализоваться без
+      рефлексии. Флаг задан здесь, а не в Directory.Build.props: Playwright общается
+      со своим Node-драйвером через рефлексивный JSON — но общается в отдельном
+      процессе, поэтому на обработчике флаг безопасен.
+    -->
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WaterCounters.Core\WaterCounters.Core.csproj" />
+    <ProjectReference Include="..\WaterCounters.Portal\WaterCounters.Portal.csproj" />
+    <ProjectReference Include="..\WaterCounters.Recognition\WaterCounters.Recognition.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MailKit" Version="4.8.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="8.0.10" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.1" />
+    <PackageReference Include="Serilog.Extensions.Hosting" Version="8.0.0" />
+    <PackageReference Include="Serilog.Sinks.Console" Version="6.0.0" />
+    <PackageReference Include="Serilog.Sinks.File" Version="6.0.0" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
