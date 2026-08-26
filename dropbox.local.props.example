@@ -7,6 +7,9 @@
   Альтернатива без файла — переменная окружения:
       $env:WATERCOUNTERS_DROPBOX_APP_KEY = 'ваш-ключ'
 
+  Значение ниже — заведомо нерабочая заглушка. Сборка выдаст предупреждение, если
+  её не заменить, а утилита настройки откажется открывать браузер.
+
   При PKCE app key не является секретом в криптографическом смысле: он неизбежно
   попадает в собранное приложение, а защиту даёт code_verifier. Но он идентифицирует
   ваше приложение, поэтому в публичном репозитории ему не место.
@@ -14,7 +17,7 @@
 <Project>
 
   <PropertyGroup>
-    <WaterCountersDropboxAppKey>ЗАМЕНИТЕ-НА-СВОЙ-APP-KEY</WaterCountersDropboxAppKey>
+    <WaterCountersDropboxAppKey>PUT-YOUR-DROPBOX-APP-KEY-HERE</WaterCountersDropboxAppKey>
   </PropertyGroup>
 
 </Project>

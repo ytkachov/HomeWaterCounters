@@ -23,7 +23,7 @@ cd HomeWaterCounters
 
 # App key Dropbox (в репозитории не хранится)
 Copy-Item dropbox.local.props.example dropbox.local.props
-# подставить ключ внутри файла
+# ОБЯЗАТЕЛЬНО заменить PUT-YOUR-DROPBOX-APP-KEY-HERE на свой ключ
 
 dotnet build WaterCounters.sln
 dotnet test  WaterCounters.sln
@@ -38,6 +38,9 @@ dotnet test  WaterCounters.sln
 dotnet run --project tools/WaterCounters.DropboxSetup -- login
 dotnet run --project tools/WaterCounters.DropboxSetup -- smoke
 ```
+
+Если ключ забыть заменить, сборка выдаст предупреждение, а `login` откажется
+открывать браузер и подскажет, что поправить.
 
 `smoke` должен пройти целиком: он проверяет конфликты при повторной записи,
 атомарность перемещения и реакцию longpoll — свойства, на которых держится очередь.

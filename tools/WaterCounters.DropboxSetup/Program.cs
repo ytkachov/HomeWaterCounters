@@ -17,6 +17,15 @@ if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
     return 2;
 }
 
+// Проверяем ключ до всего остального: без этого заглушка доезжает до Dropbox,
+// и пользователь видит "Invalid client_id" на странице вместо внятного указания,
+// что именно поправить.
+if (command is "login" or "status" or "smoke" && !DropboxAppInfo.IsConfigured)
+{
+    Console.Error.WriteLine(DropboxAppInfo.ConfigurationHint);
+    return 3;
+}
+
 var tokenStore = new DpapiTokenStore();
 
 using var cts = new CancellationTokenSource();

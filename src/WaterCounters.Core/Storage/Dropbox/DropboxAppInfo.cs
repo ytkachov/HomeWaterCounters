@@ -22,37 +22,79 @@ public static class DropboxAppInfo
     private const string EnvironmentVariableName = "WATERCOUNTERS_DROPBOX_APP_KEY";
 
     /// <summary>
-    /// App key. Кидает внятную ошибку, если сборка прошла без настроенного ключа —
-    /// иначе Dropbox ответил бы невразумительным «invalid client_id» на первом же входе.
+    /// Заглушка из dropbox.local.props.example. Проверяется явно: непустое, но
+    /// заведомо нерабочее значение иначе доезжает до Dropbox и возвращается оттуда
+    /// как «Invalid client_id» — ошибка, по которой невозможно догадаться, что просто
+    /// не заменили строку в конфиге.
     /// </summary>
-    public static string AppKey
-    {
-        get
-        {
-            if (!string.IsNullOrWhiteSpace(GeneratedDropboxAppKey.Value))
-            {
-                return GeneratedDropboxAppKey.Value;
-            }
+    public const string Placeholder = "PUT-YOUR-DROPBOX-APP-KEY-HERE";
 
-            // Запасной путь для десктопа и CLI: на Android переменных окружения нет,
-            // там работает только подстановка на этапе сборки.
-            string? fromEnvironment = Environment.GetEnvironmentVariable(EnvironmentVariableName);
-
-            if (!string.IsNullOrWhiteSpace(fromEnvironment))
-            {
-                return fromEnvironment;
-            }
-
-            throw new InvalidOperationException(
-                "App key Dropbox не задан. Скопируйте dropbox.local.props.example в " +
-                $"dropbox.local.props и укажите ключ, либо задайте переменную окружения {EnvironmentVariableName}.");
-        }
-    }
+    /// <summary>
+    /// App key. Кидает внятную ошибку, если ключ не задан или остался заглушкой.
+    /// </summary>
+    public static string AppKey =>
+        Resolve() ?? throw new InvalidOperationException(ConfigurationHint);
 
     /// <summary>Настроен ли ключ. Позволяет показать понятный экран вместо исключения.</summary>
-    public static bool IsConfigured =>
-        !string.IsNullOrWhiteSpace(GeneratedDropboxAppKey.Value) ||
-        !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(EnvironmentVariableName));
+    public static bool IsConfigured => Resolve() is not null;
+
+    /// <summary>Текст с указанием, что именно сделать. Один на все места, где это нужно сказать.</summary>
+    public static string ConfigurationHint =>
+        "App key Dropbox не задан или остался заглушкой. Скопируйте dropbox.local.props.example " +
+        "в dropbox.local.props, подставьте ключ из https://www.dropbox.com/developers/apps " +
+        $"и пересоберите решение. Либо задайте переменную окружения {EnvironmentVariableName}.";
+
+    private static string? Resolve()
+    {
+        // Подстановка на этапе сборки — единственный путь для Android: переменных
+        // окружения там нет. Переменная окружения остаётся запасным вариантом для
+        // десктопа и утилит.
+        string?[] candidates =
+        [
+            GeneratedDropboxAppKey.Value,
+            Environment.GetEnvironmentVariable(EnvironmentVariableName),
+        ];
+
+        foreach (string? candidate in candidates)
+        {
+            if (IsUsable(candidate))
+            {
+                return candidate!.Trim();
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Ключи Dropbox — короткие строки из букв и цифр ASCII. Отсечение всего
+    /// остального ловит не только известную заглушку, но и любую другую подстановку
+    /// вроде «ваш-ключ», не дожидаясь ответа сервера.
+    /// </summary>
+    private static bool IsUsable(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        string trimmed = value.Trim();
+
+        if (string.Equals(trimmed, Placeholder, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        foreach (char c in trimmed)
+        {
+            if (!char.IsAsciiLetterOrDigit(c) && c != '_')
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     /// <summary>Разрешения, запрашиваемые при авторизации. Больше не нужно ничего.</summary>
     public static IReadOnlyList<string> Scopes { get; } =
