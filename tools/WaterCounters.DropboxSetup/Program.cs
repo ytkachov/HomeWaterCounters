@@ -20,7 +20,7 @@ if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
 // Проверяем ключ до всего остального: без этого заглушка доезжает до Dropbox,
 // и пользователь видит "Invalid client_id" на странице вместо внятного указания,
 // что именно поправить.
-if (command is "login" or "status" or "smoke" && !DropboxAppInfo.IsConfigured)
+if (command is "login" or "status" or "smoke" or "ls" or "pull" && !DropboxAppInfo.IsConfigured)
 {
     Console.Error.WriteLine(DropboxAppInfo.ConfigurationHint);
     return 3;
@@ -42,6 +42,8 @@ try
         "login" => await LoginAsync(tokenStore, cts.Token),
         "status" => await StatusAsync(tokenStore, cts.Token),
         "smoke" => await SmokeAsync(tokenStore, cts.Token),
+        "ls" => await ListFolderAsync(tokenStore, args, cts.Token),
+        "pull" => await PullAsync(tokenStore, args, cts.Token),
         "logout" => await LogoutAsync(tokenStore),
         _ => Help(),
     };
@@ -65,7 +67,12 @@ static int Help()
           login    авторизоваться и сохранить refresh-токен (DPAPI, текущий пользователь)
           status   показать, есть ли сохранённый токен и работает ли он
           smoke    прогнать реальные операции в папке приложения: upload/list/move/longpoll/delete
+          ls       показать содержимое папки в облаке:  ls /photos/2026-08
+          pull     скачать папку из облака на диск:     pull /photos/2026-08 C:\путь
           logout   удалить сохранённый токен
+
+        ls и pull ходят в Dropbox напрямую по API и не зависят от десктопного
+        клиента: ими можно забрать файлы, когда синхронизация не работает.
         """);
     return 0;
 }
@@ -114,6 +121,111 @@ static async Task<int> StatusAsync(DpapiTokenStore tokenStore, CancellationToken
 
     Console.WriteLine($"Токен на месте, доступ работает. В корне папки приложения файлов: {root.Count}");
     return 0;
+}
+
+/// <summary>
+/// Содержимое папки в облаке. Показывает то, что видит API, а не то, что успел
+/// синхронизировать десктопный клиент — разница между ними и есть ответ на вопрос
+/// «файлы уже загрузились или ещё нет».
+/// </summary>
+static async Task<int> ListFolderAsync(DpapiTokenStore tokenStore, string[] args, CancellationToken ct)
+{
+    string folder = args.Length > 1 ? args[1] : "/";
+
+    using DropboxRemoteStore? store = await OpenAsync(tokenStore, ct);
+
+    if (store is null)
+    {
+        return 1;
+    }
+
+    IReadOnlyList<RemoteEntry> entries = await store.ListAsync(folder, ct);
+
+    if (entries.Count == 0)
+    {
+        Console.WriteLine($"В '{folder}' файлов нет.");
+        return 0;
+    }
+
+    Console.WriteLine($"В '{folder}' файлов: {entries.Count}");
+
+    foreach (RemoteEntry entry in entries.OrderBy(e => e.Path, StringComparer.OrdinalIgnoreCase))
+    {
+        Console.WriteLine($"  {entry.ModifiedUtc:yyyy-MM-dd HH:mm}  {entry.Size,10:N0}  {RemotePath.GetFileName(entry.Path)}");
+    }
+
+    return 0;
+}
+
+/// <summary>
+/// Скачивает папку из облака на диск. Нужна, когда клиент Dropbox не синхронизирует:
+/// API отдаёт файлы независимо от него. Уже скачанные файлы того же размера
+/// пропускаются, чтобы повтор команды не тянул всё заново.
+/// </summary>
+static async Task<int> PullAsync(DpapiTokenStore tokenStore, string[] args, CancellationToken ct)
+{
+    if (args.Length < 3)
+    {
+        Console.Error.WriteLine("Использование: pull <папка-в-облаке> <папка-на-диске>");
+        return 2;
+    }
+
+    string folder = args[1];
+    string destination = args[2];
+
+    using DropboxRemoteStore? store = await OpenAsync(tokenStore, ct);
+
+    if (store is null)
+    {
+        return 1;
+    }
+
+    IReadOnlyList<RemoteEntry> entries = await store.ListAsync(folder, ct);
+
+    if (entries.Count == 0)
+    {
+        Console.WriteLine($"В '{folder}' файлов нет — скачивать нечего.");
+        return 0;
+    }
+
+    Directory.CreateDirectory(destination);
+
+    int copied = 0;
+    int skipped = 0;
+
+    foreach (RemoteEntry entry in entries)
+    {
+        string target = Path.Combine(destination, RemotePath.GetFileName(entry.Path));
+
+        if (File.Exists(target) && new FileInfo(target).Length == entry.Size)
+        {
+            skipped++;
+            continue;
+        }
+
+        byte[] content = await store.DownloadAsync(entry.Path, ct);
+        await File.WriteAllBytesAsync(target, content, ct);
+
+        Console.WriteLine($"  {RemotePath.GetFileName(entry.Path),-40} {entry.Size,10:N0} байт");
+        copied++;
+    }
+
+    Console.WriteLine($"Скачано: {copied}, пропущено (уже на диске): {skipped}. Папка: {destination}");
+    return 0;
+}
+
+/// <summary>Открывает хранилище на сохранённом токене, либо объясняет, чего не хватает.</summary>
+static async Task<DropboxRemoteStore?> OpenAsync(DpapiTokenStore tokenStore, CancellationToken ct)
+{
+    string? token = await tokenStore.GetAsync(ct);
+
+    if (token is not null)
+    {
+        return DropboxRemoteStore.Create(token);
+    }
+
+    Console.Error.WriteLine("Токена нет. Запустите: dotnet run --project tools/WaterCounters.DropboxSetup -- login");
+    return null;
 }
 
 static async Task<int> LogoutAsync(DpapiTokenStore tokenStore)
