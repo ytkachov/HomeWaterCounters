@@ -1,0 +1,20 @@
+{
+  "name": "ТСЖ «Вымпел» (housev.ru)",
+  "loginUrl": "https://vympel.housev.ru/lk/",
+  "readingsUrl": "https://vympel.housev.ru/lk/inner.php?hms=3",
+  "meterPageUrl": "https://vympel.housev.ru/lk/inner.php?hms=3&sch={portalId}",
+  "loginInput": "form[action=\"inner.php\"] input[name=\"wlogin\"]",
+  "passwordInput": "form[action=\"inner.php\"] input[name=\"wpassw\"]",
+  "submitLoginButton": "form[action=\"inner.php\"] input[type=\"submit\"]",
+  "loggedInMarker": ".mfls",
+  "loginErrorMarker": ".center_col .c_tab p[style*=\"color:red\"]",
+  "readingInput": "input[name=\"sch_val\"]",
+  "submitReadingsButton": ".c_tab form input[type=\"submit\"]",
+  "successMarker": ".c_tab table tr:has(td:text-is(\"01.{MM}.{yyyy}\")):has(td:text-is(\"{value}\"))",
+  "alreadySubmittedMarker": ".c_tab table tr:has(td:text-is(\"01.{MM}.{yyyy}\"))",
+  "validationErrorMarker": ".center_col p[style*=\"color:red\"]",
+  "decimalSeparator": ",",
+  "navigationTimeoutMs": 30000,
+  "actionTimeoutMs": 15000,
+  "valueDecimals": 0
+}

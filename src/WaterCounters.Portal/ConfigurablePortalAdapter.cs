@@ -1,5 +1,4 @@
-using System.Globalization;
-using Microsoft.Playwright;
+﻿using Microsoft.Playwright;
 using WaterCounters.Core.Metering;
 using WaterCounters.Core.Configuration;
 
@@ -160,6 +159,18 @@ public sealed class ConfigurablePortalAdapter : IPortalAdapter
 
         ct.ThrowIfCancellationRequested();
 
+        return _map.IsPerMeter
+            ? await SubmitPerMeterAsync(period, readings, dryRun, ct).ConfigureAwait(false)
+            : await SubmitOnePageAsync(period, readings, dryRun, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Кабинет принимает всю квартиру одной формой: заполняем все поля и жмём кнопку один раз.</summary>
+    private async Task<SubmissionReceipt> SubmitOnePageAsync(
+        PeriodKey period,
+        IReadOnlyList<PortalReading> readings,
+        bool dryRun,
+        CancellationToken ct)
+    {
         if (_map.ReadingsUrl is { } url)
         {
             await _page.GotoAsync(url).ConfigureAwait(false);
@@ -167,36 +178,29 @@ public sealed class ConfigurablePortalAdapter : IPortalAdapter
 
         if (!await IsVisibleAsync(_map.LoggedInMarker).ConfigureAwait(false))
         {
-            throw await FailAsync((m, i) => new PortalSubmissionException(m, i), 
+            throw await FailAsync((m, i) => new PortalSubmissionException(m, i),
                 "Сессия не активна — требуется повторный вход.", null).ConfigureAwait(false);
         }
 
         // Проверка до ввода, а не после: если период закрыт, повторная отправка в
         // лучшем случае отвергается, в худшем — задваивает показания.
-        if (await IsVisibleAsync(_map.AlreadySubmittedMarker).ConfigureAwait(false))
+        string? alreadySubmitted = Expand(_map.AlreadySubmittedMarker, period: period);
+
+        if (await IsVisibleAsync(alreadySubmitted).ConfigureAwait(false))
         {
             return new SubmissionReceipt
             {
                 Status = SubmissionStatus.AlreadySubmitted,
                 Readings = readings,
                 Screenshot = await ScreenshotAsync().ConfigureAwait(false),
-                PortalMessage = await ReadTextAsync(_map.AlreadySubmittedMarker).ConfigureAwait(false),
+                PortalMessage = await ReadTextAsync(alreadySubmitted).ConfigureAwait(false),
             };
         }
 
         foreach (PortalReading reading in readings)
         {
-            string selector = _map.ReadingInputFor(reading.PortalId);
-            ILocator input = _page.Locator(selector);
-
-            if (await input.CountAsync().ConfigureAwait(false) == 0)
-            {
-                throw await FailAsync((m, i) => new PortalSubmissionException(m, i), 
-                    $"На странице нет поля для счётчика '{reading.PortalId}' (селектор: {selector}).",
-                    null).ConfigureAwait(false);
-            }
-
-            await input.FillAsync(Format(reading.Value)).ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
+            await FillAsync(reading).ConfigureAwait(false);
         }
 
         if (dryRun)
@@ -210,35 +214,171 @@ public sealed class ConfigurablePortalAdapter : IPortalAdapter
             };
         }
 
-        try
-        {
-            await _page.Locator(_map.SubmitReadingsButton).ClickAsync().ConfigureAwait(false);
-        }
-        catch (PlaywrightException ex)
-        {
-            throw await FailAsync((m, i) => new PortalSubmissionException(m, i), 
-                $"Не удалось нажать кнопку отправки: {ex.Message}", ex).ConfigureAwait(false);
-        }
+        await ClickSubmitAsync().ConfigureAwait(false);
 
-        if (await IsVisibleAsync(_map.SuccessMarker).ConfigureAwait(false))
+        string? success = Expand(_map.SuccessMarker, period: period);
+
+        if (await WaitForMarkerAsync(success).ConfigureAwait(false))
         {
             return new SubmissionReceipt
             {
                 Status = SubmissionStatus.Submitted,
                 Readings = readings,
                 Screenshot = await ScreenshotAsync().ConfigureAwait(false),
-                PortalMessage = await ReadTextAsync(_map.SuccessMarker).ConfigureAwait(false),
+                PortalMessage = await ReadTextAsync(success).ConfigureAwait(false),
             };
         }
 
-        string? validation = await ReadTextAsync(_map.ValidationErrorMarker).ConfigureAwait(false);
+        throw await RejectedAsync(null).ConfigureAwait(false);
+    }
 
-        throw await FailAsync((m, i) => new PortalSubmissionException(m, i), 
+    /// <summary>
+    /// Кабинет принимает по одному счётчику за визит: своя страница, своё поле, своя
+    /// кнопка. Счётчики независимы, поэтому и исход у каждого свой — один может уйти,
+    /// второй оказаться уже сданным, а третий упереться в отказ формы.
+    /// </summary>
+    private async Task<SubmissionReceipt> SubmitPerMeterAsync(
+        PeriodKey period,
+        IReadOnlyList<PortalReading> readings,
+        bool dryRun,
+        CancellationToken ct)
+    {
+        var details = new List<MeterSubmissionResult>(readings.Count);
+
+        foreach (PortalReading reading in readings)
+        {
+            ct.ThrowIfCancellationRequested();
+            details.Add(await SubmitMeterAsync(period, reading, dryRun).ConfigureAwait(false));
+        }
+
+        SubmissionStatus status = dryRun
+            ? SubmissionStatus.DryRun
+            : details.TrueForAll(d => d.Status == SubmissionStatus.AlreadySubmitted)
+                ? SubmissionStatus.AlreadySubmitted
+                : SubmissionStatus.Submitted;
+
+        return new SubmissionReceipt
+        {
+            Status = status,
+            Readings = readings,
+            Details = details,
+            // Скриншот последнего счётчика доказывает только последний счётчик,
+            // поэтому доказательства лежат в Details по одному на каждый.
+            Screenshot = details[^1].Screenshot,
+            PortalMessage = string.Join(
+                "; ",
+                details.Select(d => $"{d.Reading.MeterKey}: {Describe(d.Status)}")),
+        };
+    }
+
+    private async Task<MeterSubmissionResult> SubmitMeterAsync(PeriodKey period, PortalReading reading, bool dryRun)
+    {
+        await _page.GotoAsync(_map.MeterPageUrlFor(reading.PortalId)).ConfigureAwait(false);
+
+        if (!await IsVisibleAsync(_map.LoggedInMarker).ConfigureAwait(false))
+        {
+            throw await FailAsync((m, i) => new PortalSubmissionException(m, i),
+                $"Сессия не активна на странице счётчика '{reading.PortalId}' — требуется повторный вход.",
+                null).ConfigureAwait(false);
+        }
+
+        string? alreadySubmitted = Expand(_map.AlreadySubmittedMarker, reading.PortalId, period);
+
+        if (await IsVisibleAsync(alreadySubmitted).ConfigureAwait(false))
+        {
+            return new MeterSubmissionResult
+            {
+                Reading = reading,
+                Status = SubmissionStatus.AlreadySubmitted,
+                Screenshot = await ScreenshotAsync().ConfigureAwait(false),
+                PortalMessage = await ReadTextAsync(alreadySubmitted).ConfigureAwait(false),
+            };
+        }
+
+        string value = await FillAsync(reading).ConfigureAwait(false);
+
+        if (dryRun)
+        {
+            return new MeterSubmissionResult
+            {
+                Reading = reading,
+                Status = SubmissionStatus.DryRun,
+                Screenshot = await ScreenshotAsync().ConfigureAwait(false),
+                PortalMessage = "Режим проверки: форма заполнена, отправка не выполнялась.",
+            };
+        }
+
+        await ClickSubmitAsync().ConfigureAwait(false);
+
+        string? success = Expand(_map.SuccessMarker, reading.PortalId, period, value);
+
+        if (await WaitForMarkerAsync(success).ConfigureAwait(false))
+        {
+            return new MeterSubmissionResult
+            {
+                Reading = reading,
+                Status = SubmissionStatus.Submitted,
+                Screenshot = await ScreenshotAsync().ConfigureAwait(false),
+                PortalMessage = await ReadTextAsync(success).ConfigureAwait(false),
+            };
+        }
+
+        throw await RejectedAsync(reading).ConfigureAwait(false);
+    }
+
+    /// <summary>Заполняет поле счётчика и возвращает значение ровно в том виде, в каком оно ушло в форму.</summary>
+    private async Task<string> FillAsync(PortalReading reading)
+    {
+        string selector = _map.ReadingInputFor(reading.PortalId);
+        ILocator input = _page.Locator(selector);
+
+        if (await input.CountAsync().ConfigureAwait(false) == 0)
+        {
+            throw await FailAsync((m, i) => new PortalSubmissionException(m, i),
+                $"На странице нет поля для счётчика '{reading.PortalId}' (селектор: {selector}).",
+                null).ConfigureAwait(false);
+        }
+
+        string value = _map.FormatValue(reading.Value);
+        await input.FillAsync(value).ConfigureAwait(false);
+        return value;
+    }
+
+    private async Task ClickSubmitAsync()
+    {
+        try
+        {
+            await _page.Locator(_map.SubmitReadingsButton).ClickAsync().ConfigureAwait(false);
+        }
+        catch (PlaywrightException ex)
+        {
+            throw await FailAsync((m, i) => new PortalSubmissionException(m, i),
+                $"Не удалось нажать кнопку отправки: {ex.Message}", ex).ConfigureAwait(false);
+        }
+
+    }
+
+    private async Task<PortalSubmissionException> RejectedAsync(PortalReading? reading)
+    {
+        string? validation = await ReadTextAsync(_map.ValidationErrorMarker).ConfigureAwait(false);
+        string what = reading is null ? string.Empty : $" по счётчику '{reading.PortalId}'";
+
+        return await FailAsync((m, i) => new PortalSubmissionException(m, i),
             validation is not null
-                ? $"Кабинет отклонил показания: {validation}"
-                : "Подтверждение отправки не появилось.",
+                ? $"Кабинет отклонил показания{what}: {validation}"
+                : $"Подтверждение отправки{what} не появилось.",
             null).ConfigureAwait(false);
     }
+
+    private static string Describe(SubmissionStatus status) => status switch
+    {
+        SubmissionStatus.Submitted => "принято",
+        SubmissionStatus.AlreadySubmitted => "уже сдано за период",
+        _ => "проверка, не отправлялось",
+    };
+
+    private string? Expand(string? template, string? portalId = null, PeriodKey? period = null, string? value = null) =>
+        template is null ? null : _map.Expand(template, portalId, period, value);
 
     public async ValueTask DisposeAsync()
     {
@@ -247,8 +387,36 @@ public sealed class ConfigurablePortalAdapter : IPortalAdapter
         _playwright.Dispose();
     }
 
-    private string Format(decimal value) =>
-        value.ToString(CultureInfo.InvariantCulture).Replace(".", _map.DecimalSeparator, StringComparison.Ordinal);
+    /// <summary>
+    /// Ждёт появления маркера, а не проверяет его мгновенно.
+    ///
+    /// Отправка формы перезагружает страницу, и клик возвращает управление раньше,
+    /// чем приходит новый DOM. Мгновенная проверка искала бы подтверждение на старой
+    /// странице и объявляла бы успешную отправку провалом — то есть заставляла бы
+    /// повторить необратимое действие.
+    /// </summary>
+    private async Task<bool> WaitForMarkerAsync(string? selector)
+    {
+        if (string.IsNullOrWhiteSpace(selector))
+        {
+            return false;
+        }
+
+        try
+        {
+            await _page.Locator(selector).First
+                .WaitForAsync(new LocatorWaitForOptions { State = WaitForSelectorState.Attached })
+                .ConfigureAwait(false);
+
+            return true;
+        }
+        catch (TimeoutException)
+        {
+            // Маркера нет — это не сбой, а «кабинет не подтвердил»: разбираться будет
+            // вызывающий, у него есть текст ошибки валидации.
+            return false;
+        }
+    }
 
     private async Task<bool> IsVisibleAsync(string? selector)
     {

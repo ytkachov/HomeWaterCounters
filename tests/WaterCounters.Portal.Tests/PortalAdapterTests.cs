@@ -1,4 +1,4 @@
-using WaterCounters.Core.Metering;
+﻿using WaterCounters.Core.Metering;
 using WaterCounters.Core.Configuration;
 
 namespace WaterCounters.Portal.Tests;
@@ -248,6 +248,137 @@ public sealed class PortalAdapterTests : IDisposable
         await using ConfigurablePortalAdapter second = await CreateAdapterAsync();
 
         Assert.False(await second.IsLoggedInAsync());
+    }
+
+    /// <summary>
+    /// Кабинет, принимающий показания по одному счётчику. Отдельного признака
+    /// «уже сдано» у такого кабинета нет: сдано или нет, видно только по строке
+    /// истории с датой начала периода.
+    /// </summary>
+    private PortalSelectorMap PerMeterMap => Map with
+    {
+        Name = "mock-per-meter",
+        MeterPageUrl = _portal.MeterPageUrl,
+        ReadingInput = "input[name='sch_val']",
+        AlreadySubmittedMarker = "table.history tr:has(td:text-is('01.{MM}.{yyyy}'))",
+        SuccessMarker = "table.history tr:has(td:text-is('01.{MM}.{yyyy}')):has(td:text-is('{value}'))",
+    };
+
+    private static IReadOnlyList<PortalReading> WholeReadings() =>
+    [
+        new PortalReading { MeterKey = "cold-water", PortalId = "W-1", Value = 919m },
+        new PortalReading { MeterKey = "electricity", PortalId = "E-1", Value = 62179m },
+    ];
+
+    [Fact]
+    public async Task SubmitPerMeter_SendsEachMeterAsItsOwnSubmission()
+    {
+        await using ConfigurablePortalAdapter adapter = await CreateAdapterAsync(PerMeterMap);
+        await adapter.LoginAsync(new PortalCredentials(_portal.ValidLogin, _portal.ValidPassword));
+
+        SubmissionReceipt receipt = await adapter.SubmitAsync(_portal.CurrentPeriod, WholeReadings(), dryRun: false);
+
+        Assert.Equal(SubmissionStatus.Submitted, receipt.Status);
+
+        // Одна форма — один счётчик: две отправки, а не одна на всю квартиру.
+        Assert.Equal(2, _portal.SubmitCount);
+        Assert.Equal("919", _portal.Accepted["W-1"]);
+        Assert.Equal("62179", _portal.Accepted["E-1"]);
+
+        Assert.All(receipt.Details, d => Assert.Equal(SubmissionStatus.Submitted, d.Status));
+        Assert.All(receipt.Details, d => Assert.NotNull(d.Screenshot));
+    }
+
+    [Fact]
+    public async Task SubmitPerMeter_WithOnlyPreviousPeriodInHistory_StillSubmits()
+    {
+        // Ровно та ошибка, на которую напрашивается такой кабинет: последняя строка
+        // истории есть всегда, и принять её за «уже сдано» — значит молча пропустить
+        // период. Признаком служит только дата начала, совпавшая с текущим периодом.
+        _portal.History["W-1"] = [(_portal.CurrentPeriod.Previous(), "911")];
+        _portal.History["E-1"] = [(_portal.CurrentPeriod.Previous(), "61471")];
+
+        await using ConfigurablePortalAdapter adapter = await CreateAdapterAsync(PerMeterMap);
+        await adapter.LoginAsync(new PortalCredentials(_portal.ValidLogin, _portal.ValidPassword));
+
+        SubmissionReceipt receipt = await adapter.SubmitAsync(_portal.CurrentPeriod, WholeReadings(), dryRun: false);
+
+        Assert.Equal(SubmissionStatus.Submitted, receipt.Status);
+        Assert.Equal(2, _portal.SubmitCount);
+    }
+
+    [Fact]
+    public async Task SubmitPerMeter_SkipsOnlyTheMeterAlreadySubmittedForThisPeriod()
+    {
+        // Обычное состояние в середине месяца: электричество сдано, вода ещё нет.
+        _portal.History["E-1"] = [(_portal.CurrentPeriod, "62179")];
+
+        await using ConfigurablePortalAdapter adapter = await CreateAdapterAsync(PerMeterMap);
+        await adapter.LoginAsync(new PortalCredentials(_portal.ValidLogin, _portal.ValidPassword));
+
+        SubmissionReceipt receipt = await adapter.SubmitAsync(_portal.CurrentPeriod, WholeReadings(), dryRun: false);
+
+        Assert.Equal(SubmissionStatus.Submitted, receipt.Status);
+        Assert.Equal(1, _portal.SubmitCount);
+        Assert.Equal("919", _portal.Accepted["W-1"]);
+        Assert.False(_portal.Accepted.ContainsKey("E-1"));
+
+        Assert.Equal(
+            SubmissionStatus.Submitted,
+            receipt.Details.Single(d => d.Reading.PortalId == "W-1").Status);
+        Assert.Equal(
+            SubmissionStatus.AlreadySubmitted,
+            receipt.Details.Single(d => d.Reading.PortalId == "E-1").Status);
+    }
+
+    [Fact]
+    public async Task SubmitPerMeter_WhenEveryMeterAlreadySubmitted_ReportsAlreadySubmitted()
+    {
+        _portal.History["W-1"] = [(_portal.CurrentPeriod, "919")];
+        _portal.History["E-1"] = [(_portal.CurrentPeriod, "62179")];
+
+        await using ConfigurablePortalAdapter adapter = await CreateAdapterAsync(PerMeterMap);
+        await adapter.LoginAsync(new PortalCredentials(_portal.ValidLogin, _portal.ValidPassword));
+
+        SubmissionReceipt receipt = await adapter.SubmitAsync(_portal.CurrentPeriod, WholeReadings(), dryRun: false);
+
+        Assert.Equal(SubmissionStatus.AlreadySubmitted, receipt.Status);
+        Assert.Equal(0, _portal.SubmitCount);
+    }
+
+    [Fact]
+    public async Task SubmitPerMeter_DryRun_TouchesNoForm()
+    {
+        await using ConfigurablePortalAdapter adapter = await CreateAdapterAsync(PerMeterMap);
+        await adapter.LoginAsync(new PortalCredentials(_portal.ValidLogin, _portal.ValidPassword));
+
+        SubmissionReceipt receipt = await adapter.SubmitAsync(_portal.CurrentPeriod, WholeReadings(), dryRun: true);
+
+        Assert.Equal(SubmissionStatus.DryRun, receipt.Status);
+        Assert.Equal(0, _portal.SubmitCount);
+        Assert.Empty(_portal.Accepted);
+        Assert.All(receipt.Details, d => Assert.Equal(SubmissionStatus.DryRun, d.Status));
+    }
+
+    [Fact]
+    public async Task SubmitPerMeter_WhenPortalRejectsValue_NamesTheMeter()
+    {
+        PortalSelectorMap wrongFormat = PerMeterMap with { DecimalSeparator = "." };
+
+        await using ConfigurablePortalAdapter adapter = await CreateAdapterAsync(wrongFormat);
+        await adapter.LoginAsync(new PortalCredentials(_portal.ValidLogin, _portal.ValidPassword));
+
+        IReadOnlyList<PortalReading> fractional =
+        [
+            new PortalReading { MeterKey = "cold-water", PortalId = "W-1", Value = 919.5m },
+        ];
+
+        PortalSubmissionException ex = await Assert.ThrowsAsync<PortalSubmissionException>(
+            () => adapter.SubmitAsync(_portal.CurrentPeriod, fractional, dryRun: false));
+
+        Assert.Contains("W-1", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("Недопустимый формат числа", ex.Message, StringComparison.Ordinal);
+        Assert.Empty(_portal.Accepted);
     }
 
     [Fact]

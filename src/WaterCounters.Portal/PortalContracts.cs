@@ -1,4 +1,4 @@
-using WaterCounters.Core.Metering;
+﻿using WaterCounters.Core.Metering;
 
 namespace WaterCounters.Portal;
 
@@ -27,11 +27,30 @@ public enum SubmissionStatus
     AlreadySubmitted = 2,
 }
 
+/// <summary>
+/// Исход по одному счётчику. Существует потому, что кабинет может принимать
+/// показания поштучно: тогда один счётчик уходит, второй оказывается уже сданным,
+/// и общий статус на всю пачку теряет половину смысла.
+/// </summary>
+public sealed record MeterSubmissionResult
+{
+    public required PortalReading Reading { get; init; }
+
+    public required SubmissionStatus Status { get; init; }
+
+    public string? PortalMessage { get; init; }
+
+    public byte[]? Screenshot { get; init; }
+}
+
 public sealed record SubmissionReceipt
 {
     public required SubmissionStatus Status { get; init; }
 
     public required IReadOnlyList<PortalReading> Readings { get; init; }
+
+    /// <summary>Построчный исход при поштучной сдаче. Пусто, если кабинет принимает всю форму разом.</summary>
+    public IReadOnlyList<MeterSubmissionResult> Details { get; init; } = [];
 
     /// <summary>Скриншот страницы подтверждения — доказательство передачи, уходит письмом.</summary>
     public byte[]? Screenshot { get; init; }

@@ -1,5 +1,7 @@
+﻿using System.Globalization;
 using System.Net;
 using System.Text;
+using WaterCounters.Core.Metering;
 
 namespace WaterCounters.Portal.Tests;
 
@@ -35,6 +37,9 @@ public sealed class MockPortalServer : IDisposable
 
     public string ReadingsUrl => $"{BaseUrl}/readings";
 
+    /// <summary>Шаблон страницы одного счётчика — кабинет, принимающий показания поштучно.</summary>
+    public string MeterPageUrl => $"{BaseUrl}/meter?id={{portalId}}";
+
     public string ValidLogin { get; set; } = "user";
 
     public string ValidPassword { get; set; } = "правильный";
@@ -47,6 +52,17 @@ public sealed class MockPortalServer : IDisposable
 
     /// <summary>Идентификаторы счётчиков, для которых кабинет рисует поля ввода.</summary>
     public List<string> Meters { get; } = ["W-1", "E-1"];
+
+    /// <summary>Период, за который кабинет сейчас принимает показания.</summary>
+    public PeriodKey CurrentPeriod { get; set; } = new(2026, 8);
+
+    /// <summary>
+    /// История по каждому счётчику — то, из чего поштучный кабинет рисует таблицу
+    /// «предыдущие показания». Признака «уже сдано» у такого кабинета нет: сдано или
+    /// нет, видно только по дате начала периода в строке истории.
+    /// </summary>
+    public Dictionary<string, List<(PeriodKey Period, string Value)>> History { get; } =
+        new(StringComparer.Ordinal);
 
     /// <summary>
     /// Выдавать постоянную cookie («запомнить меня») или сессионную. Различие
@@ -141,6 +157,14 @@ public sealed class MockPortalServer : IDisposable
                 await HandleSubmitAsync(context).ConfigureAwait(false);
                 return;
 
+            case "/meter" when context.Request.HttpMethod == "GET":
+                await HandleMeterPageAsync(context).ConfigureAwait(false);
+                return;
+
+            case "/meter" when context.Request.HttpMethod == "POST":
+                await HandleMeterSubmitAsync(context).ConfigureAwait(false);
+                return;
+
             default:
                 await WriteAsync(context, 404, "<h1>404</h1>").ConfigureAwait(false);
                 return;
@@ -223,6 +247,62 @@ public sealed class MockPortalServer : IDisposable
 
         PeriodClosed = true;
         await WriteAsync(context, 200, ReadingsPage(null, "Показания приняты")).ConfigureAwait(false);
+    }
+
+    private async Task HandleMeterPageAsync(HttpListenerContext context)
+    {
+        if (!IsAuthenticated(context))
+        {
+            await WriteAsync(context, 200, LoginPage(null)).ConfigureAwait(false);
+            return;
+        }
+
+        await WriteAsync(context, 200, MeterPage(MeterId(context), null)).ConfigureAwait(false);
+    }
+
+    private async Task HandleMeterSubmitAsync(HttpListenerContext context)
+    {
+        if (!IsAuthenticated(context))
+        {
+            await WriteAsync(context, 200, LoginPage(null)).ConfigureAwait(false);
+            return;
+        }
+
+        string meter = MeterId(context);
+        Dictionary<string, string> form = await ReadFormAsync(context).ConfigureAwait(false);
+        SubmitCount++;
+
+        if (!form.TryGetValue("sch_val", out string? raw) || string.IsNullOrWhiteSpace(raw))
+        {
+            await WriteAsync(context, 200, MeterPage(meter, "Не заполнено показание")).ConfigureAwait(false);
+            return;
+        }
+
+        // Кабинет принимает только запятую — типичное поведение российских порталов.
+        if (raw.Contains('.', StringComparison.Ordinal))
+        {
+            await WriteAsync(context, 200, MeterPage(meter, $"Недопустимый формат числа: {raw}")).ConfigureAwait(false);
+            return;
+        }
+
+        Accepted[meter] = raw;
+        Rows(meter).Insert(0, (CurrentPeriod, raw));
+
+        await WriteAsync(context, 200, MeterPage(meter, null)).ConfigureAwait(false);
+    }
+
+    private static string MeterId(HttpListenerContext context) =>
+        context.Request.QueryString["id"] ?? string.Empty;
+
+    private List<(PeriodKey Period, string Value)> Rows(string meter)
+    {
+        if (!History.TryGetValue(meter, out List<(PeriodKey Period, string Value)>? rows))
+        {
+            rows = [];
+            History[meter] = rows;
+        }
+
+        return rows;
     }
 
     private bool IsAuthenticated(HttpListenerContext context)
@@ -312,6 +392,44 @@ public sealed class MockPortalServer : IDisposable
               {(validationError is null ? "" : $"<div class=\"field-error\">{WebUtility.HtmlEncode(validationError)}</div>")}
               {(success is null ? "" : $"<div class=\"alert-success\">{WebUtility.HtmlEncode(success)}</div>")}
               {body}
+            </body></html>
+            """;
+    }
+
+    /// <summary>
+    /// Страница одного счётчика: единственное поле, своя кнопка и таблица истории.
+    /// Строка истории — единственный след того, что показание принято, поэтому в ней
+    /// обязана быть и дата начала периода, и само значение.
+    /// </summary>
+    private string MeterPage(string meter, string? validationError)
+    {
+        var rows = new StringBuilder();
+
+        foreach ((PeriodKey period, string value) in Rows(meter))
+        {
+            var start = new DateOnly(period.Year, period.Month, 1);
+            DateOnly end = start.AddMonths(1).AddDays(-1);
+
+            rows.Append(
+                $"<tr><td>{start.ToString("dd.MM.yyyy", CultureInfo.InvariantCulture)}</td>" +
+                $"<td>{end.ToString("dd.MM.yyyy", CultureInfo.InvariantCulture)}</td>" +
+                $"<td>{WebUtility.HtmlEncode(value)}</td></tr>");
+        }
+
+        return $"""
+            <!doctype html>
+            <html lang="ru"><head><meta charset="utf-8"><title>Кабинет — счётчик {WebUtility.HtmlEncode(meter)}</title></head>
+            <body>
+              <div class="account-header">Личный кабинет</div>
+              {(validationError is null ? "" : $"<div class=\"field-error\">{WebUtility.HtmlEncode(validationError)}</div>")}
+              <form method="post" action="/meter?id={WebUtility.HtmlEncode(meter)}">
+                <input class="reading" name="sch_val" type="text">
+                <button id="save-readings" type="submit">Ввод</button>
+              </form>
+              <table class="history">
+                <tr><td>Дата начала</td><td>Дата окончания</td><td>Показания</td></tr>
+                {rows}
+              </table>
             </body></html>
             """;
     }
