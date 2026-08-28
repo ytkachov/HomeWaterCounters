@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using WaterCounters.Core.Configuration;
 using WaterCounters.Core.Metering;
 using WaterCounters.Core.State;
@@ -66,7 +66,7 @@ public class AppSettingsTests
               "displayName": "Электричество",
               "kind": "Electricity",
               "unit": "кВт·ч",
-              "integerDigits": 6,
+              "integerDigits": 5,
               "fractionDigits": 1,
               "serialNumber": "55-555-555",
               "portalId": "E-1",
@@ -173,9 +173,17 @@ public class AppSettingsTests
         RecognitionSettings recognition = Parse("""{"recognition":{}}""").Recognition;
 
         Assert.Equal(3, recognition.SettlingMinutes);
-        Assert.Equal(1280, recognition.MaxImageDimension);
         Assert.Equal(0.80, recognition.MinConfidence);
         Assert.True(recognition.Preprocess);
+
+        // Умолчания распознавания выбраны замером по фикстурам, а не на глаз, и
+        // менять их без нового замера незачем: снимок не ужимается (барабан занимает
+        // малую долю кадра), контекста хватает на полноразмерный кадр, выравнивание
+        // яркости выключено, промпт короткий.
+        Assert.Equal(4000, recognition.MaxImageDimension);
+        Assert.Equal(16384, recognition.ContextTokens);
+        Assert.False(recognition.EnhanceDarkFrames);
+        Assert.Equal(PromptVariant.Terse, recognition.Prompt);
 
         Assert.Equal(25, Parse("""{"schedule":{}}""").Schedule.DeadlineDayOfMonth);
         Assert.Equal(587, Parse("""{"mail":{}}""").Mail.SmtpPort);

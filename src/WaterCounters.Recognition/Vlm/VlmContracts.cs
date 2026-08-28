@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace WaterCounters.Recognition.Vlm;
@@ -21,6 +21,14 @@ internal sealed record OllamaRequestOptions
 {
     /// <summary>Ноль, а не «поменьше»: читать цифры — не творческая задача.</summary>
     public double Temperature { get; init; }
+
+    /// <summary>
+    /// Размер контекста. Задаётся явно, потому что умолчание Ollama — 4096 токенов,
+    /// а два кадра счётчика занимают больше: без этого поля хост отвечает 400
+    /// «exceeds the available context size» и распознавание не начинается вовсе.
+    /// </summary>
+    [JsonPropertyName("num_ctx")]
+    public int NumCtx { get; init; }
 }
 
 internal sealed record OllamaChatRequest
@@ -144,5 +152,6 @@ internal sealed record OpenAiChatResponse
 [JsonSerializable(typeof(OpenAiChatRequest))]
 [JsonSerializable(typeof(OpenAiChatResponse))]
 [JsonSerializable(typeof(VlmReading))]
+[JsonSerializable(typeof(VlmSerial))]
 [JsonSerializable(typeof(JsonElement))]
 internal sealed partial class RecognitionJsonContext : JsonSerializerContext;

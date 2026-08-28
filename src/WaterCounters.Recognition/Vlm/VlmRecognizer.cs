@@ -1,7 +1,8 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using WaterCounters.Core.Configuration;
 using WaterCounters.Core.Metering;
 using WaterCounters.Recognition.Preprocessing;
 
@@ -22,7 +23,24 @@ public sealed record VlmRecognizerOptions
     /// <summary>Нужен только OpenAI-совместимым фасадам, которые его требуют. Локальная Ollama — нет.</summary>
     public string? ApiKey { get; init; }
 
+    /// <summary>
+    /// Размер контекста модели. Умолчание Ollama — 4096 токенов, и в него не влезают
+    /// два кадра счётчика: хост отвечает 400 ещё до того, как модель что-то увидит.
+    /// Больше — дороже по видеопамяти, поэтому значение вынесено в настройки.
+    /// </summary>
+    public int ContextTokens { get; init; } = 8192;
+
     public PreprocessOptions Preprocess { get; init; } = new();
+
+    /// <summary>
+    /// Читать серийный номер отдельным запросом.
+    ///
+    /// Стоит вдвое дороже по времени и окупается: замер показал, что просьба заодно
+    /// прочитать номер отнимает у модели внимание от цифр — доля неверных разрядов
+    /// растёт с 8 % до 24 %. Два коротких запроса, каждый про своё, дают и показание,
+    /// и номер.
+    /// </summary>
+    public bool SeparateSerialPass { get; init; }
 }
 
 /// <summary>
@@ -59,10 +77,18 @@ public abstract class VlmRecognizer(HttpClient http, VlmRecognizerOptions option
         }
 
         long started = Stopwatch.GetTimestamp();
-        string content = await RequestAsync(meter, images, ct).ConfigureAwait(false);
-        long elapsed = (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+
+        VlmPass readingPass = Options.SeparateSerialPass ? VlmPass.ReadingOnly : VlmPass.Full;
+        string content = await RequestAsync(meter, images, readingPass, ct).ConfigureAwait(false);
 
         RecognitionResult result = VlmReadingParser.Parse(meter, content);
+
+        if (Options.SeparateSerialPass)
+        {
+            result = await AddSerialAsync(meter, images, result, ct).ConfigureAwait(false);
+        }
+
+        long elapsed = (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
 
         return result with
         {
@@ -75,7 +101,36 @@ public abstract class VlmRecognizer(HttpClient http, VlmRecognizerOptions option
     protected abstract Task<string> RequestAsync(
         MeterSpec meter,
         IReadOnlyList<MeterImage> images,
+        VlmPass pass,
         CancellationToken ct);
+
+    /// <summary>
+    /// Второй проход — только серийный номер. Его неудача не отменяет показание:
+    /// без номера снимок просто не сопоставится со счётчиком автоматически, а вот
+    /// потерять уже прочитанные цифры из-за этого было бы обидно.
+    /// </summary>
+    private async Task<RecognitionResult> AddSerialAsync(
+        MeterSpec meter,
+        IReadOnlyList<MeterImage> images,
+        RecognitionResult result,
+        CancellationToken ct)
+    {
+        try
+        {
+            string content = await RequestAsync(meter, images, VlmPass.SerialOnly, ct).ConfigureAwait(false);
+            VlmSerial? serial = JsonSerializer.Deserialize(
+                JsonPayload.Unwrap(content),
+                RecognitionJsonContext.Default.VlmSerial);
+
+            return string.IsNullOrWhiteSpace(serial?.Serial)
+                ? result with { Warnings = [.. result.Warnings, "серийный номер не прочитан"] }
+                : result with { Serial = serial.Serial.Trim() };
+        }
+        catch (Exception ex) when (ex is JsonException or RecognitionException)
+        {
+            return result with { Warnings = [.. result.Warnings, $"серийный номер не прочитан: {ex.Message}"] };
+        }
+    }
 
     protected async Task<TResponse> PostAsync<TRequest, TResponse>(
         string path,
@@ -170,24 +225,26 @@ public sealed class OllamaRecognizer(HttpClient http, VlmRecognizerOptions optio
     protected override async Task<string> RequestAsync(
         MeterSpec meter,
         IReadOnlyList<MeterImage> images,
+        VlmPass pass,
         CancellationToken ct)
     {
         var request = new OllamaChatRequest
         {
             Model = Options.Model,
             Stream = false,
-            Format = RecognitionSchema.Element,
+            Format = RecognitionSchema.For(pass),
+            Options = new OllamaRequestOptions { Temperature = 0, NumCtx = Options.ContextTokens },
             Messages =
             [
                 new OllamaMessage
                 {
                     Role = "system",
-                    Content = MeterPromptBuilder.System(meter, Options.Prompt),
+                    Content = MeterPromptBuilder.System(meter, Options.Prompt, pass),
                 },
                 new OllamaMessage
                 {
                     Role = "user",
-                    Content = MeterPromptBuilder.User(meter, Options.Prompt, images),
+                    Content = MeterPromptBuilder.User(meter, Options.Prompt, images, pass),
                     Images = [.. images.Select(ToBase64)],
                 },
             ],
@@ -223,6 +280,7 @@ public sealed class OpenAiCompatibleRecognizer(
     protected override async Task<string> RequestAsync(
         MeterSpec meter,
         IReadOnlyList<MeterImage> images,
+        VlmPass pass,
         CancellationToken ct)
     {
         List<OpenAiContentPart> parts =
@@ -230,7 +288,7 @@ public sealed class OpenAiCompatibleRecognizer(
             new OpenAiContentPart
             {
                 Type = "text",
-                Text = MeterPromptBuilder.User(meter, Options.Prompt, images),
+                Text = MeterPromptBuilder.User(meter, Options.Prompt, images, pass),
             },
             .. images.Select(static image => new OpenAiContentPart
             {
@@ -250,7 +308,7 @@ public sealed class OpenAiCompatibleRecognizer(
                 JsonSchema = new OpenAiJsonSchema
                 {
                     Name = "meter_reading",
-                    Schema = RecognitionSchema.Element,
+                    Schema = RecognitionSchema.For(pass),
                 },
             },
             Messages =

@@ -1,4 +1,4 @@
-using OpenCvSharp;
+﻿using OpenCvSharp;
 
 namespace WaterCounters.Recognition.Preprocessing;
 
@@ -66,13 +66,22 @@ public sealed class OpenCvImagePreprocessor : IImagePreprocessor
             images.Add(Encode(MeterImageKind.FullFrame, enhanced, options));
         }
 
-        using Mat dial = ExtractDial(enhanced, options);
-        images.Add(Encode(MeterImageKind.DialCrop, dial, options));
+        if (options.IncludeDialCrop || images.Count == 0)
+        {
+            using Mat dial = ExtractDial(enhanced, options);
+            images.Add(Encode(MeterImageKind.DialCrop, dial, options));
+        }
 
         return images;
     }
 
-    private static Mat Orient(Mat src, int orientation)
+    /// <summary>
+    /// Применяет тег EXIF к уже декодированному кадру. Публичный, потому что тем же
+    /// поворотом обязан пользоваться генератор искажённых фикстур: иначе его варианты
+    /// окажутся повёрнуты относительно оригинала на все 90°, и замер устойчивости
+    /// будет мерить не то, что собирался.
+    /// </summary>
+    public static Mat Orient(Mat src, int orientation)
     {
         switch (orientation)
         {

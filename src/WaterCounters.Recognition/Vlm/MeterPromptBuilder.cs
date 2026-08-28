@@ -1,30 +1,22 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Text;
 using WaterCounters.Core.Metering;
+using WaterCounters.Core.Configuration;
 using WaterCounters.Recognition.Preprocessing;
 
 namespace WaterCounters.Recognition.Vlm;
 
-/// <summary>
-/// Вариант промпта. Их несколько не для гибкости, а потому что выбор промпта —
-/// такой же замеряемый параметр, как выбор модели: bench-харнесс гоняет комбинации
-/// модель × промпт × препроцессинг по фикстурам и сравнивает долю точных совпадений.
-/// </summary>
-public enum PromptVariant
-{
-    Russian = 0,
-    English = 1,
-
-    /// <summary>Только разрядность и запрет домысливать. Проверяет, не мешает ли модели длинный текст.</summary>
-    Terse = 2,
-}
-
 /// <summary>Сборка системного и пользовательского сообщений под конкретный счётчик.</summary>
 public static class MeterPromptBuilder
 {
-    public static string System(MeterSpec meter, PromptVariant variant)
+    public static string System(MeterSpec meter, PromptVariant variant, VlmPass pass = VlmPass.Full)
     {
         ArgumentNullException.ThrowIfNull(meter);
+
+        if (pass == VlmPass.SerialOnly)
+        {
+            return SerialSystem(meter);
+        }
 
         return variant switch
         {
@@ -34,7 +26,11 @@ public static class MeterPromptBuilder
         };
     }
 
-    public static string User(MeterSpec meter, PromptVariant variant, IReadOnlyList<MeterImage> images)
+    public static string User(
+        MeterSpec meter,
+        PromptVariant variant,
+        IReadOnlyList<MeterImage> images,
+        VlmPass pass = VlmPass.Full)
     {
         ArgumentNullException.ThrowIfNull(meter);
         ArgumentNullException.ThrowIfNull(images);
@@ -42,9 +38,11 @@ public static class MeterPromptBuilder
         bool english = variant == PromptVariant.English;
         var text = new StringBuilder();
 
-        text.Append(english
-            ? $"Read the {Kind(meter, english: true)} meter."
-            : $"Прочитай показание счётчика ({Kind(meter, english: false)}).");
+        text.Append(pass == VlmPass.SerialOnly
+            ? "Найди на корпусе счётчика серийный номер и верни его."
+            : english
+                ? $"Read the {Kind(meter, english: true)} meter."
+                : $"Прочитай показание счётчика ({Kind(meter, english: false)}).");
 
         if (images.Count > 1)
         {
@@ -74,6 +72,30 @@ public static class MeterPromptBuilder
                 ? $"#{index + 1} is the whole meter"
                 : $"№{index + 1} — счётчик целиком",
         };
+
+    /// <summary>
+    /// Промпт прохода, который читает только серийный номер. Про показание здесь не
+    /// говорится ни слова — в этом весь смысл разделения: модель занимается одним
+    /// делом. Номер нужен, чтобы понять, какой счётчик на снимке: два холодных и два
+    /// горячих в квартире внешне неразличимы.
+    /// </summary>
+    private static string SerialSystem(MeterSpec meter)
+    {
+        var text = new StringBuilder();
+
+        text.AppendLine("Ты ищешь на фотографии счётчика его серийный (заводской) номер. Отвечай строго по схеме.");
+        text.AppendLine();
+        text.AppendLine("Номер напечатан или выгравирован на корпусе, на циферблате или на наклейке. Верни");
+        text.AppendLine("только сам номер, без слов «№», «зав. №» и без года выпуска, который печатают рядом.");
+        text.AppendLine();
+        text.AppendLine("Цифры на барабане счётчика — это показание, а не номер. Не путай их: показание");
+        text.AppendLine("меняется от месяца к месяцу, номер напечатан на корпусе навсегда.");
+        text.AppendLine();
+        text.AppendLine("Если номер не виден или читается неуверенно — верни null и снизь confidence.");
+        text.AppendLine("Выдуманный номер хуже отсутствующего: по нему снимок припишут не тому счётчику.");
+
+        return text.ToString();
+    }
 
     private static string RussianSystem(MeterSpec meter)
     {
@@ -151,9 +173,15 @@ public static class MeterPromptBuilder
         return text.ToString();
     }
 
+    /// <summary>
+    /// Короткий промпт. Выигрывает у подробного заметно — но правило про перекат в нём
+    /// оставлено: замер показал, что последний разряд на реальных снимках чаще всего
+    /// именно в перекате, и без этой строки модель читает его наугад.
+    /// </summary>
     private static string TerseSystem(MeterSpec meter) => Format(
         "Прочитай показание счётчика: {0} цифр до запятой, {1} после. Верни разряды строками с ведущими " +
-        "нулями. Серийный номер — как напечатан, иначе null. Не угадывай нечитаемое, снижай confidence.",
+        "нулями. Если барабан разряда в перекате и видны две цифры сразу — бери нижнюю, ту, что уходит " +
+        "вверх. Серийный номер — как напечатан, иначе null. Не угадывай нечитаемое, снижай confidence.",
         meter.IntegerDigits,
         meter.FractionDigits);
 

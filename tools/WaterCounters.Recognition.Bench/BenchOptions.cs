@@ -1,14 +1,31 @@
-using System.Globalization;
+﻿using System.Globalization;
 using WaterCounters.Core.Configuration;
 using WaterCounters.Recognition.Vlm;
 
 namespace WaterCounters.Recognition.Bench;
 
-/// <summary>Одна замеряемая комбинация: модель × промпт × препроцессинг × число проходов.</summary>
-public sealed record BenchCombination(string Model, PromptVariant Prompt, bool Preprocess, int Passes)
+/// <summary>Что кладём в запрос: полный кадр, кроп циферблата или оба.</summary>
+public enum BenchImageSet
+{
+    Both = 0,
+    FullFrame = 1,
+    DialCrop = 2,
+}
+
+/// <summary>Одна замеряемая комбинация: модель × промпт × препроцессинг × кадры × проходы.</summary>
+public sealed record BenchCombination(
+    string Model,
+    PromptVariant Prompt,
+    bool Preprocess,
+    bool Enhance,
+    BenchImageSet Images,
+    bool SerialPass,
+    int Passes)
 {
     public override string ToString() =>
-        $"{Model} / {Prompt} / {(Preprocess ? "prep" : "raw")} / ×{Passes}";
+        $"{Model} / {Prompt} / {(Preprocess ? "prep" : "raw")} / " +
+        $"{(Enhance ? "clahe" : "noclahe")} / {Images} / " +
+        $"{(SerialPass ? "2pass" : "1pass")} / ×{Passes}";
 }
 
 public sealed record BenchOptions
@@ -27,11 +44,43 @@ public sealed record BenchOptions
 
     public IReadOnlyList<int> Passes { get; init; } = [1];
 
+    /// <summary>Какие кадры класть в запрос. Проверяется замером: две картинки помогают не всегда.</summary>
+    public IReadOnlyList<BenchImageSet> Images { get; init; } = [BenchImageSet.Both];
+
+    /// <summary>
+    /// CLAHE на тёмных кадрах — отдельным измерением, а не вместе с поиском панели.
+    /// Счётчики почти всегда сняты в тёмной нише, то есть выравнивание яркости на них
+    /// срабатывает всегда, и его вклад обязан быть измерен отдельно от кропа.
+    /// </summary>
+    public IReadOnlyList<bool> Enhance { get; init; } = [false];
+
+    /// <summary>Читать серийный номер отдельным запросом — замеряется наравне с остальным.</summary>
+    public IReadOnlyList<bool> SerialPass { get; init; } = [true];
+
+    /// <summary>
+    /// Сколько испорченных вариантов делать из каждой фикстуры. Мера устойчивости к
+    /// съёмке в других условиях, а не способ увеличить выборку: варианты одного кадра
+    /// не независимы, и отчёт это оговаривает отдельной строкой.
+    /// </summary>
+    public int Augment { get; init; }
+
     public int TimeoutSeconds { get; init; } = 180;
 
     public int MaxImageDimension { get; init; } = 1280;
 
+    /// <summary>Размер контекста модели — умолчание Ollama в 4096 токенов мало для двух кадров.</summary>
+    public int ContextTokens { get; init; } = 8192;
+
     public string? CsvPath { get; init; }
+
+    /// <summary>
+    /// Куда сложить кадры ровно в том виде, в каком они уходят модели.
+    ///
+    /// Без этого разбор «почему не читается» сводится к гаданию: метрика говорит,
+    /// что модель ошиблась, но не говорит, что она вообще видела — нашёлся ли
+    /// циферблат, не срезал ли кроп половину барабана, хватает ли разрешения.
+    /// </summary>
+    public string? DumpDirectory { get; init; }
 
     /// <summary>Показать каждое расхождение отдельно — из них растут регрессионные фикстуры.</summary>
     public bool Verbose { get; init; } = true;
@@ -41,8 +90,11 @@ public sealed record BenchOptions
         .. from model in Models
            from prompt in Prompts
            from preprocess in Preprocess
+           from enhance in Enhance
+           from images in Images
+           from serialPass in SerialPass
            from passes in Passes
-           select new BenchCombination(model, prompt, preprocess, passes),
+           select new BenchCombination(model, prompt, preprocess, enhance, images, serialPass, passes),
     ];
 
     public static BenchOptions Parse(string[] args)
@@ -76,9 +128,15 @@ public sealed record BenchOptions
                 "--prompts" => options with { Prompts = [.. Split(value).Select(v => ParseEnum<PromptVariant>(key, v))] },
                 "--preprocess" => options with { Preprocess = [.. Split(value).Select(ParseFlag)] },
                 "--passes" => options with { Passes = [.. Split(value).Select(v => ParseInt(key, v))] },
+                "--images" => options with { Images = [.. Split(value).Select(v => ParseEnum<BenchImageSet>(key, v))] },
+                "--enhance" => options with { Enhance = [.. Split(value).Select(ParseFlag)] },
+                "--serial-pass" => options with { SerialPass = [.. Split(value).Select(ParseFlag)] },
+                "--augment" => options with { Augment = ParseInt(key, value) },
                 "--timeout" => options with { TimeoutSeconds = ParseInt(key, value) },
                 "--max-dimension" => options with { MaxImageDimension = ParseInt(key, value) },
+                "--context" => options with { ContextTokens = ParseInt(key, value) },
                 "--csv" => options with { CsvPath = value },
+                "--dump" => options with { DumpDirectory = value },
                 "--verbose" => options with { Verbose = ParseFlag(value) },
                 _ => throw new BenchUsageException($"Неизвестный ключ '{key}'."),
             };
@@ -103,9 +161,16 @@ public sealed record BenchOptions
           --prompts        Russian | English | Terse, через запятую
           --preprocess     on,off — с предобработкой OpenCV и без неё
           --passes         1,3 — число проходов ансамбля
+          --images         Both | FullFrame | DialCrop — какие кадры кладём в запрос
+          --enhance        on,off — выравнивание яркости CLAHE (по умолчанию off: замер показал вред)
+          --serial-pass    on,off — читать серийный номер отдельным запросом
+          --augment        сколько испорченных вариантов делать из каждой фикстуры
+                           (темнее, светлее, поворот, наклон, смаз, шум, блик)
           --timeout        секунд на один запрос (по умолчанию 180)
           --max-dimension  длинная сторона кадра (по умолчанию 1280)
+          --context        размер контекста модели в токенах (по умолчанию 8192)
           --csv            куда выгрузить таблицу результатов
+          --dump           куда сложить подготовленные кадры — то, что видит модель
           --verbose        on|off — печатать каждое расхождение (по умолчанию on)
         """;
 

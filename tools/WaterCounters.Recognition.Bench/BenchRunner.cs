@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using WaterCounters.Core.Configuration;
 using WaterCounters.Core.Metering;
 using WaterCounters.Recognition.Preprocessing;
@@ -22,15 +22,24 @@ public sealed record CaseOutcome
 
     public double Confidence { get; init; }
 
+    /// <summary>Ответ модели как есть. «Модель промолчала» и «модель ответила не по схеме» — разные диагнозы.</summary>
+    public string? RawResponse { get; init; }
+
+    /// <summary>Замечания разбора: именно они объясняют, почему прочитанное не стало значением.</summary>
+    public IReadOnlyList<string> Warnings { get; init; } = [];
+
+    /// <summary>Какой вариант снимка прогонялся: «оригинал», «тёмное», «поворот +12°».</summary>
+    public string Variant { get; init; } = "оригинал";
+
+    public bool IsOriginal => Variant == "оригинал";
+
     public bool ExactMatch => Actual == Case.Expectation.Value;
 
     public bool IntegerMatch => Actual is { } value && decimal.Truncate(value) == decimal.Truncate(Case.Expectation.Value);
 
+    /// <summary>Считается ровно тем же правилом, что и в конвейере, — иначе замер мерит не то, что работает.</summary>
     public bool SerialMatch =>
-        Case.Expectation.Serial is null ||
-        (ActualSerial is not null && Normalize(ActualSerial) == Normalize(Case.Expectation.Serial));
-
-    private static string Normalize(string serial) => new([.. serial.Where(char.IsLetterOrDigit)]);
+        Case.Expectation.Serial is null || SerialNumber.Matches(Case.Expectation.Serial, ActualSerial);
 }
 
 public sealed record BenchReport
@@ -40,6 +49,9 @@ public sealed record BenchReport
     public required IReadOnlyList<CaseOutcome> Outcomes { get; init; }
 
     public int Total => Outcomes.Count;
+
+    /// <summary>Сколько за этими наблюдениями стоит независимых фотографий.</summary>
+    public int IndependentPhotos => Outcomes.Count(o => o.IsOriginal);
 
     public int Errors => Outcomes.Count(o => o.Error is not null);
 
@@ -152,59 +164,160 @@ public sealed class BenchRunner(BenchOptions options, HttpClient http)
 
         foreach (FixtureCase fixture in cases)
         {
-            byte[] jpeg = await File.ReadAllBytesAsync(fixture.Path, ct).ConfigureAwait(false);
-            long started = Environment.TickCount64;
+            byte[] original = await File.ReadAllBytesAsync(fixture.Path, ct).ConfigureAwait(false);
+            await DumpPreparedAsync(combination, fixture, original, ct).ConfigureAwait(false);
 
-            try
+            foreach (AugmentedFixture variant in FixtureAugmenter.Variants(original, _options.Augment))
             {
-                RecognitionResult result = await recognizer
-                    .RecognizeAsync(fixture.Meter, jpeg, ct)
-                    .ConfigureAwait(false);
+                ct.ThrowIfCancellationRequested();
+                long started = Environment.TickCount64;
 
-                outcomes.Add(new CaseOutcome
+                try
                 {
-                    Case = fixture,
-                    Actual = result.Value,
-                    ActualSerial = result.Serial,
-                    Confidence = result.Confidence,
-                    ElapsedMs = result.ElapsedMs > 0 ? result.ElapsedMs : Environment.TickCount64 - started,
-                });
-            }
-            catch (RecognitionException ex)
-            {
-                // Недоступная модель — такой же результат замера, как неверная цифра:
-                // строка остаётся в таблице, иначе комбинация выглядела бы безупречной.
-                outcomes.Add(new CaseOutcome
+                    RecognitionResult result = await recognizer
+                        .RecognizeAsync(fixture.Meter, variant.Jpeg, ct)
+                        .ConfigureAwait(false);
+
+                    outcomes.Add(new CaseOutcome
+                    {
+                        Case = fixture,
+                        Variant = variant.Label,
+                        Actual = result.Value,
+                        ActualSerial = result.Serial,
+                        Confidence = result.Confidence,
+                        RawResponse = result.RawJson,
+                        Warnings = result.Warnings,
+                        ElapsedMs = result.ElapsedMs > 0 ? result.ElapsedMs : Environment.TickCount64 - started,
+                    });
+
+                    if (variant.Label == "оригинал")
+                    {
+                        await DumpResponseAsync(combination, fixture, result, ct).ConfigureAwait(false);
+                    }
+                }
+                catch (RecognitionException ex)
                 {
-                    Case = fixture,
-                    ElapsedMs = Environment.TickCount64 - started,
-                    Error = ex.Message,
-                });
+                    // Недоступная модель — такой же результат замера, как неверная цифра:
+                    // строка остаётся в таблице, иначе комбинация выглядела бы безупречной.
+                    outcomes.Add(new CaseOutcome
+                    {
+                        Case = fixture,
+                        Variant = variant.Label,
+                        ElapsedMs = Environment.TickCount64 - started,
+                        Error = ex.Message,
+                    });
+                }
             }
         }
 
         return new BenchReport { Combination = combination, Outcomes = outcomes };
     }
 
-    private IMeterRecognizer Build(BenchCombination combination)
+    /// <summary>
+    /// Складывает кадры ровно в том виде, в каком они уходят модели: полный кадр и
+    /// кроп циферблата, с размерами прямо в имени файла. Единственный способ отличить
+    /// «модель не умеет читать барабан» от «модель прислали не туда и не в том масштабе».
+    /// </summary>
+    private async Task DumpPreparedAsync(
+        BenchCombination combination,
+        FixtureCase fixture,
+        byte[] jpeg,
+        CancellationToken ct)
     {
-        var preprocess = new PreprocessOptions
+        if (_options.DumpDirectory is not { Length: > 0 } root)
         {
-            MaxDimension = _options.MaxImageDimension,
-            Enhance = combination.Preprocess,
-            DetectPanel = combination.Preprocess,
-        };
+            return;
+        }
 
-        IImagePreprocessor preprocessor = combination.Preprocess
+        string directory = Path.Combine(root, Sanitize(combination.ToString()));
+        Directory.CreateDirectory(directory);
+
+        string stem = Path.GetFileNameWithoutExtension(fixture.Path);
+
+        try
+        {
+            foreach (MeterImage image in PreprocessorFor(combination).Prepare(jpeg, PreprocessFor(combination)))
+            {
+                string name = $"{stem}__{image.Kind}_{image.Width}x{image.Height}.jpg";
+                await File.WriteAllBytesAsync(Path.Combine(directory, name), image.Jpeg, ct).ConfigureAwait(false);
+            }
+        }
+        catch (RecognitionException)
+        {
+            // Кадр, который не готовится, всё равно попадёт в таблицу ошибкой прогона.
+        }
+    }
+
+    /// <summary>
+    /// Кладёт ответ модели рядом с кадрами, которые ей показали. Без него «получено
+    /// ничего» неотличимо от «модель ответила, но не по схеме» и «модель прочитала
+    /// верно, а разбор потерял значение» — а чинить это три разные правки.
+    /// </summary>
+    private async Task DumpResponseAsync(
+        BenchCombination combination,
+        FixtureCase fixture,
+        RecognitionResult result,
+        CancellationToken ct)
+    {
+        if (_options.DumpDirectory is not { Length: > 0 } root)
+        {
+            return;
+        }
+
+        string directory = Path.Combine(root, Sanitize(combination.ToString()));
+        Directory.CreateDirectory(directory);
+
+        var text = new System.Text.StringBuilder();
+        text.AppendLine($"фикстура : {Path.GetFileName(fixture.Path)}");
+        text.AppendLine($"ждали    : {fixture.Expectation.Value}");
+        text.AppendLine($"получено : {(result.Value is { } v ? v.ToString(CultureInfo.InvariantCulture) : "ничего")}");
+        text.AppendLine($"уверенно : {result.Confidence:P0}");
+        text.AppendLine();
+        text.AppendLine("замечания разбора:");
+
+        foreach (string warning in result.Warnings)
+        {
+            text.AppendLine($"  - {warning}");
+        }
+
+        text.AppendLine();
+        text.AppendLine("ответ модели как есть:");
+        text.AppendLine(result.RawJson);
+
+        string name = $"{Path.GetFileNameWithoutExtension(fixture.Path)}__ответ.txt";
+        await File.WriteAllTextAsync(Path.Combine(directory, name), text.ToString(), ct).ConfigureAwait(false);
+    }
+
+    private static string Sanitize(string value) =>
+        string.Concat(value.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '-' : c));
+
+    private PreprocessOptions PreprocessFor(BenchCombination combination) => new()
+    {
+        MaxDimension = _options.MaxImageDimension,
+        Enhance = combination.Preprocess && combination.Enhance,
+        DetectPanel = combination.Preprocess,
+        IncludeFullFrame = combination.Images != BenchImageSet.DialCrop,
+        IncludeDialCrop = combination.Images != BenchImageSet.FullFrame,
+    };
+
+    private static IImagePreprocessor PreprocessorFor(BenchCombination combination) =>
+        combination.Preprocess
             ? new OpenCvImagePreprocessor()
             : new PassThroughImagePreprocessor();
+
+    private IMeterRecognizer Build(BenchCombination combination)
+    {
+        PreprocessOptions preprocess = PreprocessFor(combination);
+        IImagePreprocessor preprocessor = PreprocessorFor(combination);
 
         var vlmOptions = new VlmRecognizerOptions
         {
             Endpoint = _options.Endpoint,
             Model = combination.Model,
             Prompt = combination.Prompt,
+            SeparateSerialPass = combination.SerialPass,
             Timeout = TimeSpan.FromSeconds(_options.TimeoutSeconds),
+            ContextTokens = _options.ContextTokens,
             Preprocess = preprocess,
         };
 

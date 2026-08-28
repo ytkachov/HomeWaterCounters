@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using Microsoft.Extensions.Logging;
 using WaterCounters.Core.Configuration;
 using WaterCounters.Core.Forecasting;
@@ -243,7 +243,11 @@ public sealed class ReadingPipeline(
             ReadingCandidate probe = await RecognizeOneAsync(period, free[0], photo, current, known, ct)
                 .ConfigureAwait(false);
 
-            MeterSpec? matched = free.FirstOrDefault(m => SerialsMatch(m.SerialNumber, probe.RecognizedSerial));
+            // Точное совпадение проверяется первым: при вхождении подряд идущих цифр
+            // теоретически может подойти не тот счётчик, и уступать ему точному нельзя.
+            MeterSpec? matched =
+                free.FirstOrDefault(m => SerialNumber.IsExact(m.SerialNumber, probe.RecognizedSerial))
+                ?? free.FirstOrDefault(m => SerialNumber.Matches(m.SerialNumber, probe.RecognizedSerial));
 
             if (matched is null)
             {
@@ -660,18 +664,6 @@ public sealed class ReadingPipeline(
             _logger.LogWarning(ex, "Кроп {MeterKey} за {Period} не загрузился.", meterKey, period);
             return null;
         }
-    }
-
-    private static bool SerialsMatch(string? expected, string? actual)
-    {
-        if (string.IsNullOrWhiteSpace(expected) || string.IsNullOrWhiteSpace(actual))
-        {
-            return false;
-        }
-
-        static string Normalize(string serial) => new([.. serial.Where(char.IsLetterOrDigit)]);
-
-        return Normalize(expected).Equals(Normalize(actual), StringComparison.OrdinalIgnoreCase);
     }
 
     private PipelineResult Skipped(PeriodKey period, string reason)

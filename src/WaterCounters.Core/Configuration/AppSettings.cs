@@ -1,4 +1,4 @@
-using System.Text.Json.Serialization;
+﻿using System.Text.Json.Serialization;
 using WaterCounters.Core.Metering;
 
 namespace WaterCounters.Core.Configuration;
@@ -24,7 +24,18 @@ public sealed record RecognitionSettings
     /// <summary>Адрес VLM-хоста. Может указывать на другую машину в локальной сети.</summary>
     public string Endpoint { get; set; } = "http://localhost:11434";
 
-    public string Model { get; set; } = "qwen2.5vl:7b";
+    /// <summary>
+    /// Модель выбрана замером, а не по описанию: 100 % по целой части на реальных
+    /// снимках против 20 % у qwen2.5vl:7b в Q4. Требует около 10 ГБ видеопамяти.
+    /// </summary>
+    public string Model { get; set; } = "qwen3-vl:8b-instruct-q8_0";
+
+    /// <summary>
+    /// Вариант промпта. Короткий выигрывает у подробного и заметно: 100 % против 80 %
+    /// по целой части и вчетверо меньше неверных цифр. Правила про красные барабаны и
+    /// перекат, которые подробный промпт честно перечисляет, модели скорее мешают.
+    /// </summary>
+    public PromptVariant Prompt { get; set; } = PromptVariant.Terse;
 
     /// <summary>Крупная модель на слабой карте отвечает минутами, отсюда запас.</summary>
     public int TimeoutSeconds { get; set; } = 180;
@@ -41,14 +52,41 @@ public sealed record RecognitionSettings
     /// <summary>Класть кроп циферблата в Dropbox рядом с предложением — телефон покажет его у поля.</summary>
     public bool UploadCrops { get; set; } = true;
 
-    /// <summary>Длинная сторона кадра, подаваемого модели. Больше — медленнее и без выигрыша в точности.</summary>
-    public int MaxImageDimension { get; set; } = 1280;
+    /// <summary>
+    /// Длинная сторона кадра, подаваемого модели. Ужимать нельзя: барабан занимает
+    /// малую долю кадра, и на 1280 точность падает вдвое. Значение по умолчанию
+    /// оставляет типичный снимок телефона нетронутым.
+    /// </summary>
+    public int MaxImageDimension { get; set; } = 4000;
+
+    /// <summary>
+    /// Размер контекста модели. Умолчание Ollama — 4096 токенов, и два кадра счётчика
+    /// в него не помещаются: хост отвечает отказом ещё до распознавания. Больше —
+    /// дороже по видеопамяти, поэтому число вынесено сюда, а не зашито в код.
+    /// </summary>
+    public int ContextTokens { get; set; } = 16384;
+
+    /// <summary>
+    /// Читать серийный номер отдельным запросом. Вдвое дольше и того стоит: просьба
+    /// заодно прочитать номер сбивает модель с цифр, а номер — единственный способ
+    /// понять, какой счётчик на снимке, когда их в квартире несколько одинаковых.
+    /// </summary>
+    public bool SeparateSerialPass { get; set; } = true;
 
     /// <summary>Ниже этого порога уверенность модели считается недостаточной и попадает в замечания.</summary>
     public double MinConfidence { get; set; } = 0.80;
 
     /// <summary>Отключает предобработку OpenCV — на случай, когда она портит конкретные снимки.</summary>
     public bool Preprocess { get; set; } = true;
+
+    /// <summary>
+    /// Выравнивание яркости CLAHE на тёмных кадрах. По умолчанию выключено: замер по
+    /// фикстурам показал устойчивое ухудшение (80 % против 60 % по целой части) —
+    /// счётчики почти всегда сняты в тёмной нише, то есть срабатывало оно всегда, а
+    /// вытягивало вместе с цифрами шум и блики на стекле. Включать только если замер
+    /// на ваших снимках скажет обратное.
+    /// </summary>
+    public bool EnhanceDarkFrames { get; set; }
 }
 
 public sealed record PortalSettings

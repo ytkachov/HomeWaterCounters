@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Text;
 using WaterCounters.Recognition.Bench;
 
@@ -53,6 +53,17 @@ using var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan };
 var runner = new BenchRunner(options, http);
 
 Console.WriteLine($"Фикстур: {cases.Count}. Комбинаций: {options.Combinations.Count}. Хост: {options.Endpoint}");
+
+if (options.Augment > 0)
+{
+    int variants = Math.Min(options.Augment, FixtureAugmenter.MaxVariants);
+
+    // Проговаривается явно и каждый раз: доля совпадений считается по вариантам, а
+    // независимых наблюдений за ней стоит ровно столько, сколько настоящих снимков.
+    Console.WriteLine(
+        $"Аугментация: {variants} вариантов на снимок, всего {cases.Count * (variants + 1)} прогонов. " +
+        $"Это мера устойчивости к условиям съёмки — независимых фотографий по-прежнему {cases.Count}.");
+}
 Console.WriteLine();
 
 List<BenchReport> reports = [];
@@ -127,8 +138,13 @@ static void PrintMismatches(BenchReport report)
             ? $"ошибка: {error}"
             : $"получено {Format(outcome.Actual)} (уверенность {outcome.Confidence:P0})";
 
+        // Вариант снимка печатается всегда: смысл аугментации в том, чтобы увидеть,
+        // какое именно искажение ломает распознавание, а не только сколько их всего.
+        string variant = outcome.IsOriginal ? string.Empty : $" [{outcome.Variant}]";
+
         Console.WriteLine(
-            $"      {outcome.Case.Expectation.FileName}: ждали {outcome.Case.Expectation.Value}, {actual}");
+            $"      {outcome.Case.Expectation.FileName}{variant}: " +
+            $"ждали {outcome.Case.Expectation.Value}, {actual}");
     }
 }
 

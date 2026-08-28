@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Text.Json;
 using WaterCounters.Core.Metering;
 using WaterCounters.Recognition.Preprocessing;
@@ -162,6 +162,100 @@ public class VlmRecognizerTests : IDisposable
     }
 
     [Fact]
+    public async Task ResponseTruncatedInTheNotesFieldStillYieldsTheReading()
+    {
+        // Реальный случай на qwen3-vl: модель зациклилась в свободном текстовом поле
+        // и повторяла один абзац до упора в лимит генерации. Разряды к тому моменту
+        // прочитаны верно, и терять снимок из-за незакрытой скобки — расточительство.
+        _server.Content = _ =>
+            """{"integer_part":"00123","fractional_part":"456","value":123.456,"confidence":0.9,"notes":"Цифры видны""" +
+            new string('!', 500);
+
+        RecognitionResult result = await RecognizeAsync(RecognitionTestData.ColdWater);
+
+        Assert.Equal(123.456m, result.Value);
+        Assert.Contains(result.Warnings, w => w.Contains("оборван", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task TruncationBeforeTheFirstCompleteFieldIsNotGuessedAt()
+    {
+        // Обрыв до первого целого поля — это не «почти ответ», а мусор. Достроить его
+        // означало бы выдумать показание, чего распознавание делать не должно никогда.
+        _server.Content = _ => """{"integer_part":"001""";
+
+        RecognitionResult result = await RecognizeAsync(RecognitionTestData.ColdWater);
+
+        Assert.Null(result.Value);
+        Assert.False(result.IsSuccessful);
+    }
+
+    [Fact]
+    public async Task GarbageInsteadOfJsonIsRejectedRatherThanRepaired()
+    {
+        _server.Content = _ => "модель ответила текстом, а не объектом, и запятая, тут есть";
+
+        RecognitionResult result = await RecognizeAsync(RecognitionTestData.ColdWater);
+
+        Assert.Null(result.Value);
+        Assert.False(result.IsSuccessful);
+    }
+
+    [Fact]
+    public async Task SerialPass_AsksSeparatelyAndKeepsBothAnswers()
+    {
+        // Смысл разделения: один запрос про цифры, второй про номер. Вместе они
+        // конкурируют за внимание модели — доля неверных разрядов вырастает втрое.
+        _server.Content = i => i == 1
+            ? FakeVlmServer.Reading("00123", "456", 123.456, 0.9)
+            : """{"serial":"12-345-678","confidence":0.9}""";
+
+        RecognitionResult result = await RecognizeAsync(
+            RecognitionTestData.ColdWater, separateSerialPass: true);
+
+        Assert.Equal(123.456m, result.Value);
+        Assert.Equal("12-345-678", result.Serial);
+        Assert.Equal(2, _server.Requests.Count);
+    }
+
+    [Fact]
+    public async Task SerialPass_AsksTheSecondQuestionWithItsOwnSchema()
+    {
+        _server.Content = i => i == 1
+            ? FakeVlmServer.Reading("00123", "456", 123.456, 0.9)
+            : """{"serial":"12-345-678","confidence":0.9}""";
+
+        await RecognizeAsync(RecognitionTestData.ColdWater, separateSerialPass: true);
+
+        // В первом запросе серийника нет вовсе, во втором нет показания: каждый
+        // проход занят ровно одним делом, и схема это закрепляет.
+        JsonElement first = _server.Requests[0].Json.GetProperty("format").GetProperty("properties");
+        JsonElement second = _server.Requests[1].Json.GetProperty("format").GetProperty("properties");
+
+        Assert.False(first.TryGetProperty("serial", out _));
+        Assert.True(first.TryGetProperty("integer_part", out _));
+        Assert.True(second.TryGetProperty("serial", out _));
+        Assert.False(second.TryGetProperty("integer_part", out _));
+    }
+
+    [Fact]
+    public async Task SerialPass_FailingDoesNotDiscardTheReading()
+    {
+        // Без номера снимок просто не сопоставится со счётчиком автоматически.
+        // Терять из-за этого уже прочитанные цифры незачем.
+        _server.Content = i => i == 1
+            ? FakeVlmServer.Reading("00123", "456", 123.456, 0.9)
+            : "не json вовсе";
+
+        RecognitionResult result = await RecognizeAsync(
+            RecognitionTestData.ColdWater, separateSerialPass: true);
+
+        Assert.Equal(123.456m, result.Value);
+        Assert.Null(result.Serial);
+        Assert.Contains(result.Warnings, w => w.Contains("серийный номер не прочитан", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task HttpFailureIsReportedWithTheHostAddress()
     {
         _server.Status = HttpStatusCode.InternalServerError;
@@ -219,11 +313,14 @@ public class VlmRecognizerTests : IDisposable
             StringComparison.Ordinal);
     }
 
-    private async Task<RecognitionResult> RecognizeAsync(MeterSpec meter, TimeSpan? timeout = null)
+    private async Task<RecognitionResult> RecognizeAsync(
+        MeterSpec meter,
+        TimeSpan? timeout = null,
+        bool separateSerialPass = false)
     {
         var recognizer = new OllamaRecognizer(
             _http,
-            Options(timeout ?? TimeSpan.FromSeconds(30)),
+            Options(timeout ?? TimeSpan.FromSeconds(30)) with { SeparateSerialPass = separateSerialPass },
             new PassThroughImagePreprocessor());
 
         return await recognizer.RecognizeAsync(meter, RecognitionTestData.OpaqueJpeg, CancellationToken.None);

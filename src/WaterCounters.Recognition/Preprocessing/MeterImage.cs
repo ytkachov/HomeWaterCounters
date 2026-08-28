@@ -1,4 +1,4 @@
-namespace WaterCounters.Recognition.Preprocessing;
+﻿namespace WaterCounters.Recognition.Preprocessing;
 
 public enum MeterImageKind
 {
@@ -16,8 +16,13 @@ public sealed record PreprocessOptions
     /// <summary>Длинная сторона кадра, подаваемого модели.</summary>
     public int MaxDimension { get; init; } = 1280;
 
-    /// <summary>CLAHE на тёмных кадрах. Снятое со вспышкой в тёмной нише читается иначе никак.</summary>
-    public bool Enhance { get; init; } = true;
+    /// <summary>
+    /// CLAHE на тёмных кадрах. По умолчанию выключено: замер по фикстурам показал
+    /// устойчивое ухудшение — на снимке в тёмной нише выравнивание вытягивает шум и
+    /// блики на стекле до уровня цифр. Значение оставлено настраиваемым, потому что
+    /// проверено на одной квартире и одной камере.
+    /// </summary>
+    public bool Enhance { get; init; }
 
     /// <summary>Искать лицевую панель и выравнивать перспективу.</summary>
     public bool DetectPanel { get; init; } = true;
@@ -30,6 +35,13 @@ public sealed record PreprocessOptions
     public double CropScale { get; init; } = 1.0;
 
     public bool IncludeFullFrame { get; init; } = true;
+
+    /// <summary>
+    /// Класть ли в запрос кроп циферблата. Выключается не ради экономии: две картинки
+    /// одного счётчика модель иногда читает как две разные, склеивая цифры барабана
+    /// с цифрами серийного номера. Что лучше — решается замером, а не рассуждением.
+    /// </summary>
+    public bool IncludeDialCrop { get; init; } = true;
 
     public int JpegQuality { get; init; } = 92;
 }

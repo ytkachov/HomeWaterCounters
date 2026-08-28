@@ -1,4 +1,4 @@
-using WaterCounters.Core.Configuration;
+﻿using WaterCounters.Core.Configuration;
 using WaterCounters.Recognition.Preprocessing;
 using WaterCounters.Recognition.Vlm;
 
@@ -25,7 +25,7 @@ public static class RecognizerFactory
         var preprocess = new PreprocessOptions
         {
             MaxDimension = settings.MaxImageDimension,
-            Enhance = settings.Preprocess,
+            Enhance = settings.Preprocess && settings.EnhanceDarkFrames,
             DetectPanel = settings.Preprocess,
         };
 
@@ -40,6 +40,9 @@ public static class RecognizerFactory
             Endpoint = settings.Endpoint,
             Model = settings.Model,
             Timeout = TimeSpan.FromSeconds(Math.Max(10, settings.TimeoutSeconds)),
+            ContextTokens = settings.ContextTokens,
+            Prompt = settings.Prompt,
+            SeparateSerialPass = settings.SeparateSerialPass,
             Preprocess = preprocess,
         };
 

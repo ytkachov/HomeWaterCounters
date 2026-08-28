@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Text.Json;
 using WaterCounters.Core.Metering;
 
@@ -7,10 +7,11 @@ namespace WaterCounters.Recognition.Vlm;
 /// <summary>
 /// Превращает ответ модели в <see cref="RecognitionResult"/>.
 ///
-/// Значение собирается из строковых разрядов, а не берётся из поля <c>value</c>:
+/// Значение собирается из строки разрядов, а не берётся из поля <c>value</c>:
 /// разряды модель именно читает, а <c>value</c> — считает, и арифметика у неё
 /// получается заметно хуже чтения. Поле <c>value</c> используется как перекрёстная
 /// проверка: расхождение попадает в предупреждения.
+
 /// </summary>
 internal static class VlmReadingParser
 {
@@ -24,6 +25,7 @@ internal static class VlmReadingParser
         string payload = JsonPayload.Unwrap(rawJson);
 
         VlmReading? reading;
+        bool truncated = false;
 
         try
         {
@@ -31,12 +33,36 @@ internal static class VlmReadingParser
         }
         catch (JsonException ex)
         {
-            return RecognitionResult.Failed($"ответ модели не разбирается по схеме: {ex.Message}", rawJson);
+            // Ответ мог оборваться на лимите генерации — обычно в свободном текстовом
+            // поле в самом конце. Разряды к этому моменту уже прочитаны, и выбрасывать
+            // верное показание из-за незакрытой скобки означало бы терять снимок на
+            // ровном месте.
+            if (!JsonPayload.TryRepairTruncated(payload, out string repaired))
+            {
+                return RecognitionResult.Failed($"ответ модели не разбирается по схеме: {ex.Message}", rawJson);
+            }
+
+            try
+            {
+                reading = JsonSerializer.Deserialize(repaired, RecognitionJsonContext.Default.VlmReading);
+                truncated = true;
+            }
+            catch (JsonException)
+            {
+                return RecognitionResult.Failed($"ответ модели не разбирается по схеме: {ex.Message}", rawJson);
+            }
         }
 
-        return reading is null
-            ? RecognitionResult.Failed("ответ модели пуст", rawJson)
-            : Compose(meter, reading, rawJson);
+        if (reading is null)
+        {
+            return RecognitionResult.Failed("ответ модели пуст", rawJson);
+        }
+
+        RecognitionResult result = Compose(meter, reading, rawJson);
+
+        return truncated
+            ? result with { Warnings = [.. result.Warnings, "ответ модели оборван — разобрана уцелевшая часть"] }
+            : result;
     }
 
     private static RecognitionResult Compose(MeterSpec meter, VlmReading reading, string rawJson)
@@ -201,6 +227,77 @@ internal static class VlmReadingParser
 /// </summary>
 internal static class JsonPayload
 {
+    /// <summary>
+    /// Достраивает объект, оборванный посреди генерации: отбрасывает недописанное
+    /// поле и закрывает скобку. Возвращает false, если спасать нечего — тогда это
+    /// не обрыв, а мусор, и притворяться, что мы его поняли, нельзя.
+    /// </summary>
+    public static bool TryRepairTruncated(string payload, out string repaired)
+    {
+        repaired = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(payload) || payload[0] != '{')
+        {
+            return false;
+        }
+
+        int depth = 0;
+        bool inString = false;
+        bool escaped = false;
+        int lastComplete = -1;
+
+        for (int i = 0; i < payload.Length; i++)
+        {
+            char c = payload[i];
+
+            if (escaped)
+            {
+                escaped = false;
+                continue;
+            }
+
+            if (inString)
+            {
+                if (c == '\\')
+                {
+                    escaped = true;
+                }
+                else if (c == '"')
+                {
+                    inString = false;
+                }
+
+                continue;
+            }
+
+            switch (c)
+            {
+                case '"':
+                    inString = true;
+                    break;
+                case '{' or '[':
+                    depth++;
+                    break;
+                case '}' or ']':
+                    depth--;
+                    break;
+                case ',' when depth == 1:
+                    // Запятая на верхнем уровне вне строки — граница целого поля:
+                    // всё до неё разбирается, что бы ни случилось дальше.
+                    lastComplete = i;
+                    break;
+            }
+        }
+
+        if (lastComplete < 0)
+        {
+            return false;
+        }
+
+        repaired = string.Concat(payload.AsSpan(0, lastComplete), "}");
+        return true;
+    }
+
     public static string Unwrap(string raw)
     {
         if (string.IsNullOrWhiteSpace(raw))
