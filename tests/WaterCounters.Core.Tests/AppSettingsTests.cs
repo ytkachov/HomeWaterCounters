@@ -168,6 +168,25 @@ public class AppSettingsTests
     }
 
     [Fact]
+    public void ComputedPropertiesDoNotLeakIntoTheFile()
+    {
+        // settings.json правится руками и с телефона. Вычисляемые поля в нём — это
+        // не только лишний вес: поправив integerDigits, человек увидит рядом старый
+        // maxValue и решит, что файл сломан. Считаются они из основных, значит
+        // храниться не должны.
+        string json = JsonSerializer.Serialize(
+            AppSettings.CreateDefault(),
+            ConfigurationJsonContext.Default.AppSettings);
+
+        Assert.DoesNotContain("orderedMeters", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("maxValue", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("smallestIncrement", json, StringComparison.OrdinalIgnoreCase);
+
+        // А то, что задано человеком, обязано долететь.
+        Assert.Contains("integerDigits", json, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void OtherDefaultsSurviveDeserialisationToo()
     {
         RecognitionSettings recognition = Parse("""{"recognition":{}}""").Recognition;

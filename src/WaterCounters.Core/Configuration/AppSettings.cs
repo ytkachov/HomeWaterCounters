@@ -196,6 +196,7 @@ public sealed record AppSettings
         Meters.FirstOrDefault(m => string.Equals(m.Key, key, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Счётчики в порядке съёмки — в этом же порядке они показываются и в письме.</summary>
+    [JsonIgnore]
     public IReadOnlyList<MeterSpec> OrderedMeters => [.. Meters.OrderBy(m => m.SortOrder).ThenBy(m => m.Key, StringComparer.Ordinal)];
 
     /// <summary>

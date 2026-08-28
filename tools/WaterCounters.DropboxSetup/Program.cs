@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using WaterCounters.Core.Messaging;
@@ -20,7 +20,7 @@ if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
 // Проверяем ключ до всего остального: без этого заглушка доезжает до Dropbox,
 // и пользователь видит "Invalid client_id" на странице вместо внятного указания,
 // что именно поправить.
-if (command is "login" or "status" or "smoke" or "ls" or "pull" && !DropboxAppInfo.IsConfigured)
+if (command is "login" or "status" or "smoke" or "ls" or "pull" or "put" && !DropboxAppInfo.IsConfigured)
 {
     Console.Error.WriteLine(DropboxAppInfo.ConfigurationHint);
     return 3;
@@ -44,6 +44,7 @@ try
         "smoke" => await SmokeAsync(tokenStore, cts.Token),
         "ls" => await ListFolderAsync(tokenStore, args, cts.Token),
         "pull" => await PullAsync(tokenStore, args, cts.Token),
+        "put" => await PutAsync(tokenStore, args, cts.Token),
         "logout" => await LogoutAsync(tokenStore),
         _ => Help(),
     };
@@ -69,10 +70,11 @@ static int Help()
           smoke    прогнать реальные операции в папке приложения: upload/list/move/longpoll/delete
           ls       показать содержимое папки в облаке:  ls /photos/2026-08
           pull     скачать папку из облака на диск:     pull /photos/2026-08 C:\путь
+          put      залить файл в облако:                put C:\файл /config/settings.json
           logout   удалить сохранённый токен
 
-        ls и pull ходят в Dropbox напрямую по API и не зависят от десктопного
-        клиента: ими можно забрать файлы, когда синхронизация не работает.
+        ls, pull и put ходят в Dropbox напрямую по API и не зависят от десктопного
+        клиента: ими можно забрать или положить файлы, когда синхронизация не работает.
         """);
     return 0;
 }
@@ -162,6 +164,56 @@ static async Task<int> ListFolderAsync(DpapiTokenStore tokenStore, string[] args
 /// API отдаёт файлы независимо от него. Уже скачанные файлы того же размера
 /// пропускаются, чтобы повтор команды не тянул всё заново.
 /// </summary>
+/// <summary>
+/// Кладёт один файл в облако. Перезапись явная: настройки и секреты правятся
+/// редко, а молча затереть чужую свежую версию — худшее, что тут можно сделать.
+/// </summary>
+static async Task<int> PutAsync(DpapiTokenStore tokenStore, string[] args, CancellationToken ct)
+{
+    if (args.Length < 3)
+    {
+        Console.Error.WriteLine("Использование: put <файл-на-диске> <путь-в-облаке> [--force]");
+        return 2;
+    }
+
+    string source = args[1];
+    string target = args[2];
+    bool force = args.Contains("--force", StringComparer.Ordinal);
+
+    if (!File.Exists(source))
+    {
+        Console.Error.WriteLine($"Файл '{source}' не найден.");
+        return 2;
+    }
+
+    using DropboxRemoteStore? store = await OpenAsync(tokenStore, ct);
+
+    if (store is null)
+    {
+        return 1;
+    }
+
+    byte[] content = await File.ReadAllBytesAsync(source, ct);
+
+    try
+    {
+        RemoteEntry entry = await store.UploadAsync(
+            target,
+            content,
+            force ? RemoteWriteMode.Overwrite : RemoteWriteMode.FailIfExists,
+            ct);
+
+        Console.WriteLine($"Загружено: {entry.Path}, {entry.Size:N0} байт.");
+        return 0;
+    }
+    catch (RemoteConflictException)
+    {
+        Console.Error.WriteLine(
+            $"Файл '{target}' уже есть в облаке. Повторите с --force, если действительно нужно перезаписать.");
+        return 1;
+    }
+}
+
 static async Task<int> PullAsync(DpapiTokenStore tokenStore, string[] args, CancellationToken ct)
 {
     if (args.Length < 3)

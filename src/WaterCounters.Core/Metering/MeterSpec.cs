@@ -1,4 +1,4 @@
-using System.Text.Json.Serialization;
+﻿using System.Text.Json.Serialization;
 
 namespace WaterCounters.Core.Metering;
 
@@ -51,9 +51,11 @@ public sealed record MeterSpec
     public int SortOrder { get; init; }
 
     /// <summary>Максимальное значение до переполнения барабана, например 99999.999.</summary>
+    [JsonIgnore]
     public decimal MaxValue => (decimal)Math.Pow(10, IntegerDigits) - SmallestIncrement;
 
     /// <summary>Цена деления: 0.001 при трёх дробных разрядах.</summary>
+    [JsonIgnore]
     public decimal SmallestIncrement => 1m / (decimal)Math.Pow(10, FractionDigits);
 
     /// <summary>Округление вниз до цены деления — используется прогнозом.</summary>
